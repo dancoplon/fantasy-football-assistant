@@ -111,3 +111,18 @@ def test_get_session_builds_oauth2_without_writing_secret(settings):
     assert sc.consumer_key == "cid"
     assert "csecret" not in settings.token_file.read_text()
     assert not (Path.cwd() / "secrets.json").exists()
+
+
+def test_cli_two_step_auth(settings, monkeypatch, capsys):
+    from booth import cli
+
+    monkeypatch.setattr(cli.Settings, "load", classmethod(lambda cls: settings))
+    assert cli.main(["auth", "--url-only"]) == 0
+    assert capsys.readouterr().out.strip() == auth.authorization_url(settings)
+
+    payload = {"access_token": "AT", "refresh_token": "RT", "token_type": "bearer", "expires_in": 3600}
+    monkeypatch.setattr(cli, "ROOT", settings.token_file.parent.parent)
+    with mock.patch.object(auth.requests, "post", return_value=_resp(200, payload)) as post:
+        assert cli.main(["auth", "--code", "https://localhost:8000/?code=xyz"]) == 0
+    assert post.call_args.kwargs["data"]["code"] == "xyz"
+    assert json.loads(settings.token_file.read_text())["refresh_token"] == "RT"
