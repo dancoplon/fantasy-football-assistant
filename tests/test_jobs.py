@@ -24,11 +24,18 @@ def env(tmp_path, monkeypatch):
     monkeypatch.setattr(jobs, "REPORTS", tmp_path / "reports")
     monkeypatch.setattr(jobs, "ROOT", tmp_path)
     monkeypatch.setattr(jobs, "load_dotenv", lambda *a, **k: None)
+    install_at(at(2026, 10, 13, 0, 0))  # week 6 starts with the schedule installed
     return tmp_path
 
 
 def at(y, m, d, hh, mm=0):
     return datetime(y, m, d, hh, mm, tzinfo=ET)
+
+
+def install_at(when):
+    marker = jobs.state_dir() / "installed_at"
+    marker.parent.mkdir(parents=True, exist_ok=True)
+    marker.write_text(when.isoformat())
 
 
 def test_schedule_times_for_week6(games):
@@ -117,7 +124,7 @@ def test_built_report_keeps_resending_after_attempt_cap(env, games):
     failed_once = []
 
     def send(msg):
-        if msg.startswith("report") and not failed_once:
+        if "report sun 6" in msg and not failed_once:
             failed_once.append(True)
             raise RuntimeError("Messages timed out")
         sent.append(msg)
@@ -125,7 +132,7 @@ def test_built_report_keeps_resending_after_attempt_cap(env, games):
     for i in range(jobs.MAX_ATTEMPTS):
         jobs.run_due(at(2026, 10, 18, 8, i * 5), games, gen, send)
     assert jobs.run_due(at(2026, 10, 18, 9, 0), games, gen, send) == "delivered sun week 6"
-    assert sent[-1].startswith("report sun 6") and calls == [("sun", 6)]
+    assert sent[-1].endswith("report sun 6") and calls == [("sun", 6)]
 
 
 def test_late_thursday_report_is_labeled(env, games):
@@ -158,14 +165,23 @@ def test_plist_is_valid(monkeypatch):
 
 def test_on_time_saturday_report_not_late_despite_thursday_game(env, games):
     sent = []
+    jobs.run_due(at(2026, 10, 15, 12, 2), games, _gen([]), sent.append)
     jobs.run_due(at(2026, 10, 17, 8, 2), games, _gen([]), sent.append)
-    assert not sent[0].startswith("LATE")
+    assert sent[1] == "report sat 6"
+
+
+def test_saturday_report_names_the_game_a_missed_thursday_check_skipped(env, games):
+    sent = []
+    jobs.run_due(at(2026, 10, 17, 9, 0), games, _gen([]), sent.append)  # asleep Thursday through Saturday 9 AM
+    assert sent[0].startswith("LATE: sent Sat 9:00 AM ET, after kickoff of SEA@DEN.")
 
 
 def test_sunday_catch_up_after_london_kickoff_is_late(env, games):
     sent = []
+    jobs.run_due(at(2026, 10, 15, 12, 0), games, _gen([]), sent.append)
+    jobs.run_due(at(2026, 10, 17, 8, 0), games, _gen([]), sent.append)
     jobs.run_due(at(2026, 10, 18, 10, 0), games, _gen([]), sent.append)
-    assert sent[0].startswith("LATE:") and "HOU@JAX" in sent[0] and "SEA@DEN" not in sent[0]
+    assert sent[2].startswith("LATE: sent Sun 10:00 AM ET, after kickoff of HOU@JAX.")
 
 
 def test_test_send_uses_same_runner_as_schedule(monkeypatch, tmp_path):
@@ -190,7 +206,7 @@ def test_test_send_uses_same_runner_as_schedule(monkeypatch, tmp_path):
 def test_install_never_back_fills_older_reports(env, games):
     # Installed Monday afternoon: last Sunday's report is not Booth's to send, and after
     # Monday night's kickoff it isn't reported as missed either.
-    jobs.mark_installed(at(2026, 10, 12, 13, 30))
+    install_at(at(2026, 10, 12, 13, 30))
     sent = []
     out = jobs.run_due(at(2026, 10, 12, 13, 30), games, _gen([]), sent.append)
     assert out == "sun week 5 was due before the schedule was installed" and sent == []
@@ -200,7 +216,15 @@ def test_install_never_back_fills_older_reports(env, games):
     assert jobs.installed_at() == at(2026, 10, 12, 13, 30)
 
 
+def test_no_install_record_means_nothing_before_now_is_owed(env, games):
+    (jobs.state_dir() / "installed_at").unlink()
+    sent = []
+    assert jobs.run_due(at(2026, 10, 13, 8, 5), games, _gen([]), sent.append) == "tue week 6 was due before the schedule was installed"
+    assert jobs.installed_at() == at(2026, 10, 13, 8, 5) and sent == []
+
+
 def test_monday_catch_up_before_monday_night_game(env, games):
+    install_at(at(2026, 10, 11, 0, 0))
     sent = []
     out = jobs.run_due(at(2026, 10, 12, 9, 0), games, _gen([]), sent.append)
     assert out == "delivered sun week 5"
@@ -208,14 +232,45 @@ def test_monday_catch_up_before_monday_night_game(env, games):
 
 
 def test_missed_lineup_report_is_reported_once(env, games):
+    install_at(at(2026, 10, 1, 0, 0))
     sent = []
-    for hh in (21, 22):  # after Monday night's kickoff, the Mac never ran Sunday's report
+    for hh in (21, 22):  # after Monday night's kickoff, the Mac never ran week 5's lineup reports
         out = jobs.run_due(at(2026, 10, 12, hh, 0), games, _gen([]), sent.append)
     assert out == "sun week 5 expired, nothing to send"
-    assert len(sent) == 1 and sent[0].startswith("Booth missed the Sunday final lineup pass for week 5")
+    assert sent == ["Booth didn't get the Sunday final lineup pass to you for week 5 (the Mac was asleep or off, or the "
+                    "run failed). These games locked without a lineup check: TB@DAL, PHI@JAX, CHI@GB, CIN@MIA and 1 more. "
+                    "Nothing to do now."]
+
+
+def test_missed_sunday_is_reported_on_tuesday_morning(env, games):
+    install_at(at(2026, 10, 1, 0, 0))
+    sent = []
+    jobs.run_due(at(2026, 10, 8, 12, 5), games, _gen([]), sent.append)
+    jobs.run_due(at(2026, 10, 10, 8, 5), games, _gen([]), sent.append)
+    jobs.run_due(at(2026, 10, 13, 9, 0), games, _gen([]), sent.append)  # asleep Sat 8 AM to Tue 9 AM
+    assert sent[2].startswith("Booth didn't get the Sunday final lineup pass to you for week 5")
+    assert "PHI@JAX, CHI@GB, CIN@MIA, BUF@LA" in sent[2] and "TB@DAL" not in sent[2]
+    assert sent[3] == "report tue 6" and len(sent) == 4
+    jobs.run_due(at(2026, 10, 13, 9, 30), games, _gen([]), sent.append)
+    assert len(sent) == 4
+
+
+def test_stale_built_report_is_rebuilt(env, games):
+    install_at(at(2026, 10, 11, 0, 0))
+    calls, sent = [], []
+
+    def send(msg):
+        if not calls[1:]:
+            raise RuntimeError("Messages timed out")
+        sent.append(msg)
+
+    jobs.run_due(at(2026, 10, 11, 8, 5), games, _gen(calls), send, notify_fn=lambda t: None)
+    assert jobs.run_due(at(2026, 10, 12, 19, 0), games, _gen(calls), send) == "delivered sun week 5"
+    assert calls == [("sun", 5), ("sun", 5)]  # rebuilt with Monday's news, not Sunday morning's
 
 
 def test_late_label_uses_send_time(env, games):
+    install_at(at(2026, 10, 11, 0, 0))
     # Started 9:20 Sunday, finished 9:34: PHI@JAX (9:30) kicked off while the report was being built.
     clock = iter([at(2026, 10, 11, 9, 34)])
     sent = []
@@ -226,11 +281,15 @@ def test_late_label_uses_send_time(env, games):
 
 
 def test_report_finished_after_its_window_is_not_sent(env, games):
-    # The Mac slept mid-run and woke after Monday night's kickoff.
+    # The Mac slept mid-run and woke after Monday night's kickoff: no report, one notice.
+    install_at(at(2026, 10, 11, 0, 0))
     clock = iter([at(2026, 10, 13, 7, 0)])
     sent = []
     out = jobs.run_due(at(2026, 10, 12, 20, 0), games, _gen([]), sent.append, clock=lambda: next(clock))
-    assert "too late to send" in out and sent == []
+    assert "too late to send" in out
+    assert len(sent) == 1 and sent[0].startswith("Booth didn't get the Sunday final lineup pass to you for week 5")
+    jobs.run_due(at(2026, 10, 13, 7, 30), games, _gen([]), sent.append)
+    assert len(sent) == 1
 
 
 def test_lock_busy_skips_but_other_errors_alert(env, games):
@@ -269,7 +328,7 @@ def test_lock_is_released_when_the_process_is_killed(env):
 
 def test_corrupt_week_file_is_set_aside(env, games):
     path = env / "state" / "2026-wk06.json"
-    path.parent.mkdir(parents=True)
+    path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text('{"season": 2026, "week"')  # truncated by a full disk
     sent = []
     assert jobs.run_due(at(2026, 10, 13, 8, 5), games, _gen([]), sent.append) == "delivered tue week 6"
@@ -334,7 +393,30 @@ def test_plist_path_includes_uv_dir(monkeypatch):
     assert schedule.plist_dict()["EnvironmentVariables"]["PATH"].startswith("/opt/tools/bin:")
 
 
+def test_early_failures_alert_at_most_every_few_hours(env, games, monkeypatch):
+    def broken(season, week):
+        raise PermissionError("state folder not writable")
+
+    monkeypatch.setattr(jobs, "_bookkeeping", broken)
+    sent = []
+    for mm in (5, 35):
+        assert jobs.run_due(at(2026, 10, 13, 8, mm), games, _gen([]), sent.append).startswith("failed tue week 6")
+    assert len(sent) == 1 and "error before the Tuesday waiver report" in sent[0]
+
+
+def test_unwritable_log_never_blocks_an_alert(env, games):
+    (env / "logs").write_text("not a folder")
+
+    def boom(run, week, now):
+        raise RuntimeError("claude not logged in")
+
+    sent = []
+    jobs.run_due(at(2026, 10, 13, 8, 5), games, boom, sent.append)
+    assert len(sent) == 1 and "couldn't build" in sent[0]
+
+
 def test_install_records_first_install(env, monkeypatch, tmp_path):
+    (jobs.state_dir() / "installed_at").unlink()
     monkeypatch.setattr(schedule, "_bin", lambda name: f"/Users/x/.local/bin/{name}")
     monkeypatch.setattr(schedule, "PLIST", tmp_path / "com.booth.scheduler.plist")
     monkeypatch.setattr(schedule, "ROOT", tmp_path)

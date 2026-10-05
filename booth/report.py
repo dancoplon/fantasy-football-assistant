@@ -98,7 +98,7 @@ class ReportError(RuntimeError):
 
 
 def build_prompt(run: str, week: int, now: datetime, early_games: str = "Thursday 8:15 PM ET",
-                 locked_games: str = "none") -> str:
+                 locked_games: str = "none", early_games_left: str = "none") -> str:
     fields = {
         "week": week,
         "today": now.strftime("%Y-%m-%d"),
@@ -108,6 +108,7 @@ def build_prompt(run: str, week: int, now: datetime, early_games: str = "Thursda
         "length_hint": LENGTH_HINTS[run],
         "early_games": early_games,
         "locked_games": locked_games,
+        "early_games_left": early_games_left,
     }
     text = (PROMPTS / "common.md").read_text() + "\n" + (PROMPTS / f"{run}.md").read_text()
     for k, v in fields.items():
@@ -200,13 +201,14 @@ def _game_label(g: dict) -> str:
     return f"{g['day']} {_kickoff(g).strftime('%-I:%M %p')} ET, {g['away']}@{g['home']}"
 
 
-def early_games_for(week: int, games: list[dict]) -> str:
+def early_games_for(week: int, games: list[dict], after: datetime | None = None) -> str:
     """Games before the main Sunday slate (Thursday night, plus Wednesday, Thanksgiving,
-    Friday or Saturday games): each one locks its players at kickoff."""
+    Friday or Saturday games): each one locks its players at kickoff. With `after`, only
+    those that haven't kicked off yet."""
     sched = nflverse.schedule(week, games)["games"]
     sundays = sorted(g["date"] for g in sched if g["day"] == "Sunday")
-    early = [g for g in sched if not sundays or g["date"] < sundays[0]]
-    return "; ".join(_game_label(g) for g in early) or "none this week"
+    early = [g for g in sched if (not sundays or g["date"] < sundays[0]) and (after is None or _kickoff(g) > after)]
+    return "; ".join(_game_label(g) for g in early) or "none"
 
 
 def locked_games_at(week: int, games: list[dict], now: datetime) -> str:
@@ -223,7 +225,8 @@ def generate(run: str, week: int | None = None, now: datetime | None = None, cla
     now = now or datetime.now(EASTERN)
     games = nflverse.games()
     week = week or nflverse.current_week(games, now.date())
-    prompt = build_prompt(run, week, now, early_games_for(week, games), locked_games_at(week, games, now))
+    prompt = build_prompt(run, week, now, early_games_for(week, games), locked_games_at(week, games, now),
+                          early_games_for(week, games, after=now))
 
     result = claude(prompt)
     out = result["structured_output"]

@@ -33,7 +33,7 @@ def load_week(season: int, week: int, base: Path | None = None) -> dict:
     if path.exists():
         try:
             return json.loads(path.read_text())
-        except json.JSONDecodeError:
+        except ValueError:  # bad JSON or bad bytes
             # A damaged file (e.g. a full disk mid-write) must not stop the rest of the week's
             # reports. Keep it for inspection and start the week fresh.
             path.replace(path.with_name(f"{path.name}.corrupt-{int(time.time())}"))
@@ -51,8 +51,15 @@ def write_week(data: dict, base: Path | None = None) -> Path:
 
 
 def prior_snapshot(season: int, week: int, run: str, base: Path | None = None) -> dict | None:
-    """The snapshot this run should diff against, falling back to the latest earlier run that week."""
-    runs = load_week(season, week, base)["runs"]
+    """The snapshot this run should diff against, falling back to the latest earlier run that week.
+
+    Once the scheduler is tracking the week, only reports that reached Dan count: "No changes"
+    must mean no changes from something he actually read.
+    """
+    data = load_week(season, week, base)
+    runs = data["runs"]
+    if "jobs" in data:
+        runs = {r: s for r, s in runs.items() if data["jobs"].get(r, {}).get("delivered_at")}
     target = DIFF_AGAINST.get(run)
     if target is None:
         return None

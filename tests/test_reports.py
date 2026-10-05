@@ -76,6 +76,24 @@ def test_prompt_fills_placeholders():
     assert "{" not in p.replace("{}", "")
 
 
+@pytest.mark.parametrize("run", ["tue", "thu", "sat", "sun"])
+def test_every_prompt_is_fully_filled(run):
+    now = datetime(2026, 10, 17, 8, 0, tzinfo=ZoneInfo("America/New_York"))
+    p = report.build_prompt(run, 6, now, "Thursday 8:15 PM ET, SEA@DEN", "SEA@DEN", "none")
+    assert "{" not in p.replace("{}", ""), p
+
+
+def test_prior_snapshot_counts_only_delivered_reports_once_scheduled(tmp_path):
+    state.save_snapshot(snap("thu"), base=tmp_path)
+    data = state.load_week(2026, 5, base=tmp_path)
+    data["jobs"] = {"thu": {"generated": True}}  # built but never reached Dan
+    state.write_week(data, base=tmp_path)
+    assert state.prior_snapshot(2026, 5, "sat", base=tmp_path) is None
+    data["jobs"]["thu"]["delivered_at"] = "2026-10-08T12:05:00-04:00"
+    state.write_week(data, base=tmp_path)
+    assert state.prior_snapshot(2026, 5, "sat", base=tmp_path)["run"] == "thu"
+
+
 def test_schema_matches_prd_fields():
     req = set(report.SNAPSHOT_SCHEMA["required"])
     assert {"lineup", "bench_flags", "waiver_recs", "weather_flags", "sources", "message"} <= req
@@ -123,6 +141,8 @@ def test_early_and_locked_games():
     assert report.early_games_for(5, games) == "Thursday 8:15 PM ET, TB@DAL"
     sun_10am = datetime(2026, 10, 11, 10, 0, tzinfo=ZoneInfo("America/New_York"))
     assert report.locked_games_at(5, games, sun_10am) == "TB@DAL; PHI@JAX"
+    thu_night = datetime(2026, 10, 8, 21, 0, tzinfo=ZoneInfo("America/New_York"))
+    assert report.early_games_for(5, games, after=thu_night) == "none"
 
 
 def _stream(*events):
