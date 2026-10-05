@@ -153,10 +153,11 @@ def cmd_report(args: argparse.Namespace) -> int:
 
 
 def cmd_run(args: argparse.Namespace) -> int:
-    from booth.jobs import run_due
+    from booth.jobs import EASTERN, run_due
 
     outcome = run_due()
-    print(outcome)
+    # launchd appends this to logs/launchd.out.log, which `booth schedule status` shows.
+    print(f"{datetime.now(EASTERN).strftime('%Y-%m-%d %H:%M:%S %Z')}  {outcome}")
     return 1 if outcome.startswith("failed") else 0
 
 

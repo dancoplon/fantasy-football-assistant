@@ -425,6 +425,21 @@ def test_install_records_first_install(env, monkeypatch, tmp_path):
     assert jobs.installed_at() is not None
 
 
+
+def test_status_shows_every_check_not_just_reports(monkeypatch, tmp_path):
+    monkeypatch.setattr(schedule, "ROOT", tmp_path)
+    out = "\n".join(["\tstate = not running", "\truns = 3", "\tlast exit code = 0", "\tpath = x"])
+    monkeypatch.setattr(schedule, "_launchctl", lambda *a: type("R", (), {"returncode": 0, "stdout": out, "stderr": ""})())
+    text = schedule.status()
+    assert "runs = 3" in text and "path = x" not in text
+    assert text.count("(none yet)") == 2
+    (tmp_path / "logs").mkdir()
+    (tmp_path / "logs" / "launchd.out.log").write_text("".join(f"2026-10-05 18:{m:02d}:00 EDT  nothing due\n" for m in range(10)))
+    text = schedule.status()
+    assert "18:09:00 EDT  nothing due" in text and "18:04:00" not in text
+    assert text.count("(none yet)") == 1
+
+
 def _fails_n_times(n, calls=None):
     left = [n]
 

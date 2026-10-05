@@ -129,9 +129,16 @@ def status() -> str:
     if res.returncode != 0:
         return "Not installed."
     keep = [ln.strip() for ln in res.stdout.splitlines() if any(k in ln for k in ("state =", "last exit code", "runs ="))]
-    log = ROOT / "logs" / "booth.log"
-    tail = log.read_text().splitlines()[-8:] if log.exists() else []
-    return "\n".join(["Installed.", *keep, "Recent log:", *tail])
+    return "\n".join([
+        "Installed.", *keep,
+        "Recent checks (every scheduled run, including ones with nothing due):", *_tail(ROOT / "logs" / "launchd.out.log", 5),
+        "Recent reports and problems:", *_tail(ROOT / "logs" / "booth.log", 8),
+    ])
+
+
+def _tail(path: Path, n: int) -> list[str]:
+    lines = path.read_text(errors="replace").splitlines()[-n:] if path.exists() else []
+    return [f"  {ln}" for ln in lines] or ["  (none yet)"]
 
 
 def test_send(wait_seconds: int = 180) -> str:
