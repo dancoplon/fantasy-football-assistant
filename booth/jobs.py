@@ -248,45 +248,98 @@ def _alert(text: str, send_fn, notify_fn) -> bool:
         return False
 
 
-def _throttled(key: str, hours: int = 6) -> bool:
-    """True if this alert already went out in the last few hours. Backs up the per-report
-    flags when the week file can't be saved (full disk, permissions)."""
-    path = ROOT / "logs" / "alerts.json"
-    now = datetime.now(EASTERN)
+def _alert_log() -> dict:
     try:
-        seen = json.loads(path.read_text())
+        return json.loads((ROOT / "logs" / "alerts.json").read_text())
     except (OSError, ValueError):
-        seen = {}
-    last = seen.get(key)
-    if last and now - datetime.fromisoformat(last) < timedelta(hours=hours):
-        return True
-    seen[key] = now.isoformat()
+        return {}
+
+
+def _recently_alerted(key: str, hours: float = 6) -> bool:
+    """True if this alert reached Dan within the last few hours. Backs up the per-report
+    flags in the week file when that can't be saved (full disk, permissions)."""
+    last = _alert_log().get(key)
+    return bool(last) and datetime.now(EASTERN) - datetime.fromisoformat(last) < timedelta(hours=hours)
+
+
+def _mark_alerted(key: str) -> None:
+    seen = _alert_log()
+    seen[key] = datetime.now(EASTERN).isoformat()
     try:
+        path = ROOT / "logs" / "alerts.json"
         path.parent.mkdir(exist_ok=True)
         path.write_text(json.dumps(seen))
     except OSError:
         pass
-    return False
 
 
-def _report_missed(week: int, games: list[dict], now: datetime, send_fn, notify_fn) -> None:
-    """Once a week's last game has kicked off, say once if its last lineup reports never reached Dan."""
-    if not any(int(g["week"]) == week for g in games) or now < expires_at("sun", week, games):
-        return
-    season = nflverse.SEASON
-    jobs = _bookkeeping(season, week)
+def _alert_once(key: str, text: str, send_fn, notify_fn, hours: float = 6) -> bool:
+    """Alert unless the same one went out recently. Recorded only once it actually got through."""
+    if _recently_alerted(key, hours):
+        return False
+    if not _alert(text, send_fn, notify_fn):
+        return False
+    _mark_alerted(key)
+    return True
+
+
+def _missed_lines(week: int, jobs: dict, games: list[dict], now: datetime) -> tuple[str, str] | None:
+    """(report label, games that locked without it) for a finished week, or None if nothing is
+    owed or it was already said."""
     owed = _owed(week, jobs, games, now)
-    final = jobs.setdefault("sun", {})
-    if not owed or final.get("missed_alerted") or any(jobs.get(r, {}).get("gave_up_alerted") for r in owed):
-        return  # nothing owed, already said, or Dan was already told no report is coming
+    if not owed or jobs.get("sun", {}).get("missed_alerted"):
+        return None
+    # A report that already told Dan "no report is coming" needs no second notice.
+    unannounced = [r for r in owed if not jobs.get(r, {}).get("gave_up_alerted")]
+    if not unannounced:
+        return None
     start = scheduled_at(owed[0], week, games)
     locked = [g for g in games if int(g["week"]) == week and _kickoff(g) > start]
-    text = (f"Booth didn't get the {RUN_LABELS[owed[-1]]} to you for week {week} (the Mac was asleep or off, "
-            f"or the run failed). These games locked without a lineup check: {_game_names(locked)}. Nothing to do now.")
-    _log(f"missed {', '.join(owed)} week {week}")
-    if _alert(text, send_fn, notify_fn):
-        final["missed_alerted"] = True
-        _save_bookkeeping(season, week, jobs)
+    return RUN_LABELS[unannounced[-1]], _game_names(locked)
+
+
+def _report_missed(up_to_week: int, games: list[dict], now: datetime, send_fn, notify_fn) -> None:
+    """Say once, in one message, which finished weeks had lineup reports that never reached Dan.
+
+    Every finished week since the install is checked, so even a long absence is reported.
+    """
+    since = installed_at()
+    season = nflverse.SEASON
+    found = []
+    for week in sorted({int(g["week"]) for g in games}):
+        if week > up_to_week or now < expires_at("sun", week, games):
+            continue
+        if since and expires_at("sun", week, games) < since:
+            continue  # finished before Booth was installed
+        jobs = _bookkeeping(season, week)
+        line = _missed_lines(week, jobs, games, now)
+        if line and not _recently_alerted(f"missed-{season}-{week}", hours=24 * 30):
+            found.append((week, jobs, line))
+    if not found:
+        return
+    if len(found) == 1:
+        week, _, (label, locked) = found[0]
+        text = (f"Booth didn't get the {label} to you for week {week} (the Mac was asleep or off, or the run "
+                f"failed). These games locked without a lineup check: {locked}. Nothing to do now.")
+    else:
+        text = ("Booth didn't get these reports to you (the Mac was asleep or off, or the run failed):\n"
+                + "\n".join(f"- Week {w}: the {label}. Locked without a lineup check: {locked}." for w, _, (label, locked) in found)
+                + "\nNothing to do now.")
+    _log(f"missed lineup reports for week(s) {', '.join(str(w) for w, _, _ in found)}")
+    if not _alert(text, send_fn, notify_fn):
+        return
+    for week, jobs, _ in found:
+        _mark_alerted(f"missed-{season}-{week}")
+        jobs.setdefault("sun", {})["missed_alerted"] = True
+        try:
+            _save_bookkeeping(season, week, jobs)
+        except Exception as exc:
+            _log(f"couldn't save week {week}: {exc}")
+
+
+def _kickoff_soon(week: int, games: list[dict], now: datetime, minutes: int = 45) -> bool:
+    """A game this week kicks off within the next `minutes`: no time to rebuild a report."""
+    return any(now < _kickoff(g) <= now + timedelta(minutes=minutes) for g in games if int(g["week"]) == week)
 
 
 def run_due(now: datetime | None = None, games: list[dict] | None = None, generate_fn=generate, send_fn=send,
@@ -309,8 +362,11 @@ def run_due(now: datetime | None = None, games: list[dict] | None = None, genera
     if not found:
         return "nothing due"
     run, week = found
-    if installed_at() is None:
-        mark_installed(now)  # first run ever: nothing before this moment is Booth's
+    try:
+        if installed_at() is None:
+            mark_installed(now)  # first run ever: nothing before this moment is Booth's
+    except OSError as exc:
+        _log(f"couldn't record the install time: {exc}")  # the lock below fails too, and alerts
     if not _counted(run, week, games):
         return f"{run} week {week} was due before the schedule was installed"
     season = nflverse.SEASON
@@ -320,11 +376,10 @@ def run_due(now: datetime | None = None, games: list[dict] | None = None, genera
     stage = "setup"
     try:
         with _Lock():
-            for wk in (week - 1, week):
-                try:
-                    _report_missed(wk, games, now, send_fn, notify_fn)
-                except Exception as exc:
-                    _log(f"couldn't check week {wk} for missed reports: {exc}")
+            try:
+                _report_missed(week, games, now, send_fn, notify_fn)
+            except Exception as exc:
+                _log(f"couldn't check for missed reports: {exc}")
             jobs = _bookkeeping(season, week)
             job = jobs.setdefault(run, {})
             if job.get("delivered_at"):
@@ -333,29 +388,39 @@ def run_due(now: datetime | None = None, games: list[dict] | None = None, genera
                 return f"{run} week {week} expired, nothing to send"
             report_file = REPORTS / f"{season}-wk{week:02d}-{run}.txt"
             built = bool(job.get("generated") and report_file.exists())
-            # A report built before games kicked off (its send failed) is out of date: rebuild it.
-            stale = built and _kicked_off_between(week, games, job.get("generated_at"), now)
-            if stale and job.get("attempts", 0) < MAX_ATTEMPTS:
-                built = stale = False
-            if not built and job.get("attempts", 0) >= MAX_ATTEMPTS:
+            earlier = None
+            if built:
+                earlier = report_file.read_text()  # built earlier, only the send failed
+                if _kicked_off_between(week, games, job.get("generated_at"), now):
+                    built_at = datetime.fromisoformat(job["generated_at"])
+                    earlier = f"(Built {built_at.strftime('%a %-I:%M %p')} ET; some games have kicked off since.)\n\n{earlier}"
+                    # Out of date: rebuild it, unless a kickoff is too close to risk the time.
+                    if job.get("attempts", 0) < MAX_ATTEMPTS and not _kickoff_soon(week, games, now):
+                        built = False
+            if not built and not earlier and job.get("attempts", 0) >= MAX_ATTEMPTS:
                 return f"{run} week {week} gave up after {MAX_ATTEMPTS} attempts"
 
             _stay_awake()
             if built:
-                message = report_file.read_text()  # built earlier, only the send failed
-                if stale:
-                    built_at = datetime.fromisoformat(job["generated_at"])
-                    message = f"(Built {built_at.strftime('%a %-I:%M %p')} ET; some games have kicked off since.)\n\n{message}"
+                message = earlier
                 sent_at = clock()
             else:
                 stage = "build"
                 job["attempts"] = job.get("attempts", 0) + 1
                 _save_bookkeeping(season, week, jobs)
-                message = generate_fn(run, week=week, now=now)["message"]
-                sent_at = clock()  # building takes minutes and the Mac may have slept meanwhile
-                job["generated"] = True
-                job["generated_at"] = sent_at.isoformat()
-                _save_bookkeeping(season, week, jobs)
+                try:
+                    message = generate_fn(run, week=week, now=now)["message"]
+                except Exception as exc:
+                    if earlier is None:
+                        raise
+                    _log(f"rebuilding {run} week {week} failed, sending the earlier version: {exc}")
+                    message = earlier
+                    sent_at = clock()
+                else:
+                    sent_at = clock()  # building takes minutes and the Mac may have slept meanwhile
+                    job["generated"] = True
+                    job["generated_at"] = sent_at.isoformat()
+                    _save_bookkeeping(season, week, jobs)
 
             if sent_at >= expires_at(run, week, games) or due_run(sent_at, games) != (run, week):
                 outcome = f"{run} week {week} finished at {sent_at:%a %-I:%M %p}, too late to send"
@@ -363,7 +428,7 @@ def run_due(now: datetime | None = None, games: list[dict] | None = None, genera
                 try:
                     _report_missed(week, games, sent_at, send_fn, notify_fn)
                 except Exception as exc:
-                    _log(f"couldn't check week {week} for missed reports: {exc}")
+                    _log(f"couldn't check for missed reports: {exc}")
                 return outcome
             note = lateness_note(run, week, sent_at, games, jobs)
             if note:
@@ -387,8 +452,8 @@ def run_due(now: datetime | None = None, games: list[dict] | None = None, genera
 def _fail(run, week, label, exc, jobs, job, send_fn, notify_fn, season, stage="build") -> str:
     _log(f"FAILED {run} week {week}: {exc}\n{traceback.format_exc()}")
     if not jobs and not job:  # failed before the week's bookkeeping loaded
-        if not _throttled(f"{run}-{week}-early-{type(exc).__name__}"):
-            _alert(f"Booth hit an error before the {label} (week {week}): {str(exc)[:300]}", send_fn, notify_fn)
+        _alert_once(f"{run}-{week}-early-{type(exc).__name__}",
+                    f"Booth hit an error before the {label} (week {week}): {str(exc)[:300]}", send_fn, notify_fn)
         return f"failed {run} week {week}: {exc}"
     job["last_error"] = str(exc)[:500]
     attempts = job.get("attempts", 0)
@@ -396,10 +461,6 @@ def _fail(run, week, label, exc, jobs, job, send_fn, notify_fn, season, stage="b
         key = "send_alerted"
         text = (f"Booth built the {label} (week {week}) but couldn't send it: {str(exc)[:300]}\n"
                 f"It will keep trying every 30 minutes while the Mac is awake.")
-    elif attempts >= MAX_ATTEMPTS and job.get("generated"):
-        key = "gave_up_alerted"
-        text = (f"Booth couldn't rebuild the {label} (week {week}) with the latest news: {str(exc)[:300]}\n"
-                f"It will send the earlier version instead.")
     elif attempts >= MAX_ATTEMPTS:
         key = "gave_up_alerted"
         text = (f"Booth gave up on the {label} (week {week}) after {attempts} tries: {str(exc)[:300]}\n"
@@ -409,7 +470,7 @@ def _fail(run, week, label, exc, jobs, job, send_fn, notify_fn, season, stage="b
         text = (f"Booth couldn't build the {label} (week {week}): {str(exc)[:300]}\n"
                 f"It will retry every 30 minutes while the Mac is awake, up to {MAX_ATTEMPTS} tries. "
                 f"If a deadline is close, check Yahoo yourself.")
-    if not job.get(key) and not _throttled(f"{run}-{week}-{key}") and _alert(text, send_fn, notify_fn):
+    if not job.get(key) and _alert_once(f"{run}-{week}-{key}", text, send_fn, notify_fn):
         job[key] = True
     jobs[run] = job
     try:

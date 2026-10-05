@@ -1,5 +1,5 @@
 import plistlib
-from datetime import datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -423,3 +423,117 @@ def test_install_records_first_install(env, monkeypatch, tmp_path):
     monkeypatch.setattr(schedule, "_launchctl", lambda *a: type("R", (), {"returncode": 1 if a[0] == "print" else 0, "stderr": ""})())
     schedule.install()
     assert jobs.installed_at() is not None
+
+
+def _fails_n_times(n, calls=None):
+    left = [n]
+
+    def gen(run, week, now):
+        if left[0] > 0:
+            left[0] -= 1
+            raise RuntimeError("overloaded")
+        return _gen(calls if calls is not None else [])(run, week, now)
+    return gen
+
+
+def test_a_saturday_give_up_doesnt_hide_a_missed_sunday(env, games):
+    sent = []
+    jobs.run_due(at(2026, 10, 15, 12, 5), games, _gen([]), sent.append)
+    for i in range(jobs.MAX_ATTEMPTS):  # Saturday's report fails every time
+        jobs.run_due(at(2026, 10, 17, 8, 0) + timedelta(minutes=30 * i), games, _fails_n_times(1), sent.append)
+    assert any("gave up on the Saturday" in m for m in sent)
+    jobs.run_due(at(2026, 10, 20, 9, 0), games, _gen([]), sent.append)  # asleep until Tuesday
+    assert sum("didn't get the Sunday final lineup pass to you for week 6" in m for m in sent) == 1
+
+
+def test_missed_notice_isnt_repeated_when_the_week_file_cant_be_saved(env, games, monkeypatch):
+    sent = []
+    jobs.run_due(at(2026, 10, 15, 12, 5), games, _gen([]), sent.append)
+
+    def no_disk(data, base=None):
+        raise OSError(28, "No space left on device")
+
+    monkeypatch.setattr(jobs, "write_week", no_disk)
+    for hh in (21, 22, 23):  # Sunday night, after the last game, with the Mac asleep all weekend
+        jobs.run_due(at(2026, 10, 18, hh, 0), games, _gen([]), sent.append)
+    assert sum("didn't get" in m for m in sent) == 1
+
+
+def test_an_alert_that_didnt_get_through_is_retried(env, games):
+    sent, notes, tries = [], [], []
+
+    def send(msg):
+        tries.append(msg)
+        if len(tries) == 1:
+            raise RuntimeError("Messages hiccup")
+        sent.append(msg)
+
+    def notify(msg):
+        if not notes:
+            notes.append(None)
+            raise RuntimeError("no notifications")
+
+    boom = _fails_n_times(99)
+    jobs.run_due(at(2026, 10, 15, 12, 0), games, boom, send, notify_fn=notify)
+    jobs.run_due(at(2026, 10, 15, 12, 30), games, boom, send, notify_fn=notify)
+    assert len(sent) == 1 and "couldn't build the Thursday" in sent[0]
+
+
+def test_unusable_state_folder_still_alerts(env, games, monkeypatch):
+    (env / "blocker").write_text("a file where the state folder should be")
+    monkeypatch.setenv("BOOTH_STATE_DIR", str(env / "blocker" / "state"))
+    sent = []
+    out = jobs.run_due(at(2026, 10, 13, 8, 5), games, _gen([]), sent.append)
+    assert out.startswith("failed tue week 6") and "error before the Tuesday" in sent[0]
+
+
+def _with_weeks_7_and_8(games):
+    out = list(games)
+    for shift in (1, 2):
+        for g in games:
+            if g["week"] != "6":
+                continue
+            d = (date.fromisoformat(g["gameday"]) + timedelta(days=7 * shift)).isoformat()
+            out.append({**g, "week": str(6 + shift), "gameday": d, "game_id": g["game_id"].replace("_06_", f"_{6 + shift:02d}_")})
+    return out
+
+
+def test_long_absence_reports_every_missed_week_in_one_message(env, games):
+    games = _with_weeks_7_and_8(games)
+    sent = []
+    jobs.run_due(at(2026, 10, 15, 12, 5), games, _gen([]), sent.append)
+    jobs.run_due(at(2026, 10, 27, 9, 0), games, _gen([]), sent.append)  # asleep Thu wk 6 to Tue wk 8
+    notices = [m for m in sent if "didn't get" in m]
+    assert len(notices) == 1 and "- Week 6: the Sunday final lineup pass" in notices[0] and "- Week 7:" in notices[0]
+    assert sent[-1] == "report tue 8"
+
+
+def test_failed_rebuild_sends_the_earlier_version(env, games):
+    calls, sent = [], []
+    failed = []
+
+    def send(msg):
+        if not failed:
+            failed.append(msg)
+            raise RuntimeError("Messages timed out")
+        sent.append(msg)
+
+    jobs.run_due(at(2026, 10, 18, 8, 0), games, _gen(calls), send, notify_fn=lambda t: None)
+    out = jobs.run_due(at(2026, 10, 18, 12, 20), games, _fails_n_times(99), send)  # HOU@JAX played; Claude down
+    assert out == "delivered sun week 6"
+    assert "(Built Sun 8:00 AM ET; some games have kicked off since.)" in sent[-1] and sent[-1].endswith("report sun 6")
+
+
+def test_no_rebuild_right_before_a_kickoff(env, games):
+    calls, sent = [], []
+    failed = []
+
+    def send(msg):
+        if not failed:
+            failed.append(msg)
+            raise RuntimeError("Messages timed out")
+        sent.append(msg)
+
+    jobs.run_due(at(2026, 10, 18, 8, 0), games, _gen(calls), send, notify_fn=lambda t: None)
+    jobs.run_due(at(2026, 10, 18, 20, 0), games, _gen(calls), send)  # 20 minutes before the night game
+    assert calls == [("sun", 6)] and sent[-1].endswith("report sun 6")
