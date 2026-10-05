@@ -44,4 +44,10 @@ During `booth auth`, Yahoo redirects to `https://localhost:8000/?code=...`. Noth
 
 Tokens are saved to `secrets/yahoo_token.json` (owner-only permissions, gitignored). Every run refreshes the access token first. If `booth check` returns a 401/403 after `booth auth` succeeded, Yahoo hasn't provisioned Fantasy API access for the app yet.
 
+## Yahoo MCP server
+
+`uv run booth-mcp` starts a stdio MCP server with six read-only tools: `get_league_settings`, `get_my_roster`, `get_free_agents`, `get_matchup`, `get_transactions`, `get_standings`. Claude Code loads it from `.mcp.json` when run in this repo (try `claude` then "what's my roster?").
+
+If Yahoo can't be reached (no token yet, or API access not provisioned), `get_my_roster` falls back to `config/manual_roster.json` and says so (`"source": "manual"`). Keep that file current by hand until Yahoo access works.
+
 Run the tests with `uv run pytest`.

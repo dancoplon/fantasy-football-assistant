@@ -5,6 +5,7 @@ description = "Booth: a personal, read-only fantasy football assistant for one Y
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
+    "mcp>=2.3,<3",
     "python-dotenv>=1.0",
     "requests>=2.31",
     "yahoo-fantasy-api>=2.12",
@@ -13,6 +14,7 @@ dependencies = [
 
 [project.scripts]
 booth = "booth.cli:main"
+booth-mcp = "booth.mcp_server:main"
 
 [dependency-groups]
 dev = ["pytest>=8"]
