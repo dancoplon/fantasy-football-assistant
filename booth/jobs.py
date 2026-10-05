@@ -58,6 +58,25 @@ def scheduled_at(run: str, week: int, games: list[dict]) -> datetime:
     return datetime(d.year, d.month, d.day, hh, mm, tzinfo=EASTERN)
 
 
+def _kickoff(g: dict) -> datetime:
+    d = date.fromisoformat(g["gameday"])
+    hh, mm = (int(x) for x in g["gametime"].split(":"))
+    return datetime(d.year, d.month, d.day, hh, mm, tzinfo=EASTERN)
+
+
+def expires_at(run: str, week: int, games: list[dict]) -> datetime:
+    """After this, the report is useless and a catch-up run skips it.
+
+    Tuesday's waiver report is replaced by Thursday's check; the lineup reports
+    stay useful until the week's last Sunday game kicks off.
+    """
+    if run == "tue":
+        return scheduled_at("thu", week, games)
+    sunday = (week_thursday(week, games) + timedelta(days=3)).isoformat()
+    sunday_games = [_kickoff(g) for g in games if int(g["week"]) == week and g["gameday"] == sunday]
+    return max(sunday_games) if sunday_games else scheduled_at(run, week, games) + timedelta(hours=12)
+
+
 def due_run(now: datetime, games: list[dict]) -> tuple[str, int] | None:
     """The most recent report whose time has passed, as (run, week)."""
     weeks = sorted({int(g["week"]) for g in games})
@@ -126,6 +145,8 @@ def run_due(now: datetime | None = None, games: list[dict] | None = None, genera
     if not found:
         return "nothing due"
     run, week = found
+    if now >= expires_at(run, week, games):
+        return f"{run} week {week} expired, nothing to send"
     season = nflverse.SEASON
     jobs = _bookkeeping(season, week)
     job = jobs.get(run, {})

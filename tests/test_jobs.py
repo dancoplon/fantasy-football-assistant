@@ -158,3 +158,21 @@ def test_test_send_uses_same_runner_as_schedule(monkeypatch, tmp_path):
     monkeypatch.setattr(schedule, "_launchctl", fake_launchctl)
     assert schedule.test_send(wait_seconds=5) == "sent via imessage"
     assert calls[-1][0] == "bootout" and not (tmp_path / "com.booth.sendtest.plist").exists()
+
+
+def test_expired_report_is_not_sent_on_install(env, games):
+    # Installing on Monday afternoon must not send last Sunday's lineup report.
+    sent = []
+    out = jobs.run_due(at(2026, 10, 12, 13, 30), games, _gen([]), sent.append)
+    assert out == "sun week 5 expired, nothing to send" and sent == []
+
+
+def test_sunday_report_still_sent_before_sunday_night_game(env, games):
+    sent = []
+    out = jobs.run_due(at(2026, 10, 18, 19, 0), games, _gen([]), sent.append)
+    assert out == "delivered sun week 6" and sent[0].startswith("LATE:")
+
+
+def test_tuesday_report_expires_when_thursday_check_is_due(games):
+    assert jobs.expires_at("tue", 6, games) == at(2026, 10, 15, 12)
+    assert jobs.expires_at("sun", 6, games) == at(2026, 10, 18, 20, 20)
