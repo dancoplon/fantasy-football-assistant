@@ -63,4 +63,14 @@ The same MCP server also exposes free public data, none of which needs Yahoo:
 
 Downloads are cached in `state/cache/`; if a source is down, the last good copy is used. `uv run booth data-check` pulls each source once and prints a summary.
 
+## Reports
+
+`uv run booth report tue|thu|sat|sun [--week N]` runs Claude Code headless (`claude -p`) with the MCP server above, web search, and the prompts in `prompts/`. Claude returns the message plus a structured snapshot (lineup with projections, bench flags, waiver recs with FAAB bids, weather flags, sources). Booth then:
+
+- saves the snapshot to `state/2026-wkNN.json` (one file per week, every run kept as a decision log; `state/latest.json` points at the newest week),
+- for Saturday and Sunday, diffs against the previous run's snapshot (Thursday, then Saturday) and opens the message with "Changes since last report: ..." or "No changes. Lineup stands." Only structured fields count, so reworded reasoning never triggers a change,
+- writes the final text to `reports/2026-wkNN-<run>.txt`.
+
+Set `BOOTH_MODEL` to pick a model; the default is Claude Code's.
+
 Run the tests with `uv run pytest`.

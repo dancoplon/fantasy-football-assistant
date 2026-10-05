@@ -3,6 +3,7 @@
   uv run booth auth    one-time Yahoo authorization (opens a browser)
   uv run booth check   refresh the token and pull league settings (Milestone 1 check)
   uv run booth data-check   pull each external source once and print a short summary
+  uv run booth report thu   generate a report (tue, thu, sat, sun) into reports/ and print it
 """
 
 from __future__ import annotations
@@ -122,6 +123,19 @@ def cmd_data_check(args: argparse.Namespace) -> int:
     return 1 if failures else 0
 
 
+def cmd_report(args: argparse.Namespace) -> int:
+    from booth.report import ReportError, generate
+
+    try:
+        result = generate(args.run, week=args.week)
+    except ReportError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    print(result["message"])
+    print(f"\n[saved {result['path'].relative_to(ROOT)}; cost ${result['snapshot'].get('cost_usd') or 0:.2f}]")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="booth")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -135,6 +149,10 @@ def main(argv: list[str] | None = None) -> int:
     p_auth.set_defaults(func=cmd_auth)
     sub.add_parser("check", help="refresh token and pull league settings").set_defaults(func=cmd_check)
     sub.add_parser("data-check", help="pull each external data source once").set_defaults(func=cmd_data_check)
+    p_rep = sub.add_parser("report", help="generate a report now")
+    p_rep.add_argument("run", choices=["tue", "thu", "sat", "sun"])
+    p_rep.add_argument("--week", type=int, help="NFL week (default: current week)")
+    p_rep.set_defaults(func=cmd_report)
     args = parser.parse_args(argv)
     try:
         return args.func(args)
