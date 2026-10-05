@@ -110,10 +110,23 @@ def build_prompt(run: str, week: int, now: datetime, tnf_kickoff: str = "Thursda
     return text
 
 
+def claude_bin() -> str:
+    """BOOTH_CLAUDE_BIN, else `claude` on PATH, else the native installer's ~/.local/bin/claude."""
+    if os.getenv("BOOTH_CLAUDE_BIN"):
+        return os.environ["BOOTH_CLAUDE_BIN"]
+    import shutil
+
+    found = shutil.which("claude")
+    if found:
+        return found
+    local = Path.home() / ".local" / "bin" / "claude"
+    return str(local) if local.exists() else "claude"
+
+
 def run_claude(prompt: str, timeout: int = 900) -> dict:
     """Run `claude -p` with Booth's MCP server and return its structured output."""
     cmd = [
-        os.getenv("BOOTH_CLAUDE_BIN", "claude"),
+        claude_bin(),
         "-p",
         prompt,
         "--output-format", "json",

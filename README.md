@@ -73,4 +73,14 @@ Downloads are cached in `state/cache/`; if a source is down, the last good copy 
 
 Set `BOOTH_MODEL` to pick a model; the default is Claude Code's.
 
+## Schedule and delivery (macOS)
+
+- `uv run booth schedule install` installs one LaunchAgent (`com.booth.scheduler`) that runs `booth run due` at each report time (Tue 8 AM, Thu 12 PM, Sat 8 AM, Sun 8 AM Eastern, converted to the Mac's time zone), every 30 minutes, and at login. A report missed while the Mac slept or was off goes out on the next wake; a report already delivered is never sent twice, and one superseded by a later report is skipped. A report that arrives after a kickoff it should have preceded starts with "LATE:".
+- If a report can't be built, Booth sends one alert message instead of failing silently, then retries up to 3 times.
+- Delivery is iMessage to `IMESSAGE_RECIPIENT` in `.env` via `booth/deliver.py`, a single `send()` function so the channel can be swapped later. `uv run booth send-test` checks it.
+- `BOOTH_DRY_RUN=1` prefixes every message with `[DRY RUN]`.
+- `uv run booth schedule wake` (optional) asks for an admin password once and sets a 7:55 AM wake on Tue/Sat/Sun. It's reliable only when plugged in.
+- Scheduled runs need Claude Code's standalone CLI signed in (`~/.local/bin/claude`).
+- `uv run booth schedule status` shows the job and recent log lines; logs are in `logs/`.
+
 Run the tests with `uv run pytest`.
