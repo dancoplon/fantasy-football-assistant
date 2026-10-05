@@ -13,7 +13,7 @@ from booth.config import ConfigError, Settings
 from booth.context import league_config, strategy_text
 from booth.data import nflverse, sleeper, weather
 from booth.data.cache import DataSourceError
-from booth.manual import manual_roster
+from booth.manual import manual_free_agents, manual_roster
 from booth.yahoo import YahooAccessError, YahooClient
 
 mcp = MCPServer("yahoo-fantasy")
@@ -64,11 +64,16 @@ def get_free_agents(position: str | None = None, limit: int = 50, sort_type: str
     position: QB, RB, WR, TE, K, DEF, or W/R/T; omit for all positions.
     limit: max players to return (default 50).
     sort_type: ranking window, one of lastweek, lastmonth, season.
+    If Yahoo is unreachable, returns Dan's saved list from config/manual_free_agents.json
+    with source="manual", its as_of time, and a note on what it covers.
     """
     try:
         return client().free_agents(position=position, limit=limit, sort_type=sort_type)
     except (ConfigError, AuthError, YahooAccessError) as exc:
-        return _error(exc)
+        saved = manual_free_agents(position, limit)
+        if saved is None:
+            return {"error": f"{exc} No saved list of available players from the last 7 days either."}
+        return {**saved, "yahoo_error": str(exc)}
 
 
 @mcp.tool(annotations=READ_ONLY)
