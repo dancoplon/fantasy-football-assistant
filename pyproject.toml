@@ -1,0 +1,25 @@
+[project]
+name = "booth"
+version = "0.1.0"
+description = "Booth: a personal, read-only fantasy football assistant for one Yahoo team"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "python-dotenv>=1.0",
+    "requests>=2.31",
+    "yahoo-fantasy-api>=2.12",
+    "yahoo-oauth>=2.1",
+]
+
+[project.scripts]
+booth = "booth.cli:main"
+
+[dependency-groups]
+dev = ["pytest>=8"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
