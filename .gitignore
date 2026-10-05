@@ -17,6 +17,8 @@ oauth2.json
 state/
 logs/
 reports/
+# League data copied by hand from Yahoo (see config/manual_free_agents.example.json).
+config/manual_free_agents.json
 
 # --- Python ----------------------------------------------------------------------
 __pycache__/

@@ -48,7 +48,7 @@ Tokens are saved to `secrets/yahoo_token.json` (owner-only permissions, gitignor
 
 `uv run booth-mcp` starts a stdio MCP server with six read-only tools: `get_league_settings`, `get_my_roster`, `get_free_agents`, `get_matchup`, `get_transactions`, `get_standings`. Claude Code loads it from `.mcp.json` when run in this repo (try `claude` then "what's my roster?").
 
-If Yahoo can't be reached (no token yet, or API access not provisioned), `get_my_roster` falls back to `config/manual_roster.json` and says so (`"source": "manual"`). Keep that file current by hand until Yahoo access works.
+If Yahoo can't be reached (no token yet, or API access not provisioned), `get_my_roster` falls back to `config/manual_roster.json` and says so (`"source": "manual"`). Keep that file current by hand until Yahoo access works. Likewise `get_free_agents` falls back to `config/manual_free_agents.json`, a saved copy of Yahoo's available-players page, for 7 days after its `as_of` time. That file holds league data, so it stays on the Mac (gitignored); `config/manual_free_agents.example.json` shows its shape.
 
 ## External data and league context
 

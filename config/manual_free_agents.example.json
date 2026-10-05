@@ -1,0 +1,13 @@
+{
+  "_note": "Example of config/manual_free_agents.json, the gitignored fallback for get_free_agents while Yahoo access is pending. Copy Yahoo's available-players page into this shape (made-up players here). Booth stops using the real file 7 days after as_of.",
+  "as_of": "2026-10-05T17:39:00-04:00",
+  "note": "Dan's saved copy of Yahoo's available-players list: offense only (no kickers or defenses), the 50 most-rostered available players. Players may have been claimed since as_of. 'waivers until <date>' means a FAAB claim that processes on that date; 'free agent' means an instant add until his game kicks off, when he goes on waivers. week4_proj_pts is Yahoo's projection for week 4, a rough guide to role only.",
+  "players": [
+    {"name": "Example Quarterback", "nfl_team": "CHI", "position": "QB", "status": "", "availability": "waivers until Oct 7", "bye_week": 10, "pct_rostered": 3, "week4_proj_pts": 16.5, "preseason_rank": 2870, "season_rank": 23},
+    {"name": "Example Backup QB", "nfl_team": "WAS", "position": "QB", "status": "D", "availability": "waivers until Oct 7", "bye_week": 7, "pct_rostered": 9, "week4_proj_pts": 11.0, "preseason_rank": 2232, "season_rank": 77},
+    {"name": "Example Running Back", "nfl_team": "GB", "position": "RB", "status": "Q", "availability": "waivers until Oct 7", "bye_week": 11, "pct_rostered": 2, "week4_proj_pts": 4.2, "preseason_rank": 285, "season_rank": 261},
+    {"name": "Example Receiver", "nfl_team": "ATL", "position": "WR", "status": "", "availability": "free agent", "bye_week": 11, "pct_rostered": 1, "week4_proj_pts": 4.0, "preseason_rank": 268, "season_rank": 265},
+    {"name": "Example Tight End", "nfl_team": "CIN", "position": "TE", "status": "", "availability": "waivers until Oct 7", "bye_week": 6, "pct_rostered": 7, "week4_proj_pts": 6.1, "preseason_rank": 172, "season_rank": 204},
+    {"name": "Example Injured Rookie", "nfl_team": "CAR", "position": "RB", "status": "IR-R", "availability": "waivers until Oct 7", "bye_week": 5, "pct_rostered": 1, "week4_proj_pts": 0.0, "preseason_rank": 304, "season_rank": 758}
+  ]
+}

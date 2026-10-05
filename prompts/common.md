@@ -5,7 +5,8 @@ Games this week that have already kicked off (their players are locked and can't
 
 ## Do this first
 1. Call get_league_context and follow the strategy in it.
-2. Call get_my_roster. If the result has "source": "manual", Yahoo access is still pending: work from that list, and end the message with one line: "Roster from manual list (Yahoo access pending)." In that case get_matchup and get_free_agents will fail; say "opponent unknown" rather than guessing, and mark any add as "check he's available".
+2. Call get_my_roster. If the result has "source": "manual", Yahoo access is still pending: work from that list, and end the message with one line: "Roster from manual list (Yahoo access pending)." In that case get_matchup will fail; say "opponent unknown" rather than guessing.
+   - get_free_agents may then return "source": "manual": Dan's saved copy of Yahoo's available players, dated as_of. Read its note. Recommend adds from that list and say once which date it's from (e.g. "Pickups from your Oct 5 list"). Mark any add that isn't on it (kickers and defenses never are) as "check he's available". If get_free_agents returns an error, mark every add that way.
 3. Call get_schedule for week {week} to get byes, kickoff times, and implied team points.
 
 ## Hard rules

@@ -162,3 +162,43 @@ def test_league_context_loads():
     ctx = mcp_server.get_league_context()
     assert ctx["league"]["scoring"]["reception"] == 0.5
     assert "Contending" in ctx["strategy"] or "contending" in ctx["strategy"]
+
+
+
+@pytest.fixture
+def saved_list(monkeypatch):
+    from booth import manual
+    monkeypatch.setattr(manual, "MANUAL_FREE_AGENTS", manual.ROOT / "config" / "manual_free_agents.example.json")
+    return manual
+
+
+def test_manual_free_agents_filters_by_position_and_expires(saved_list):
+    from datetime import datetime, timezone
+    fresh = datetime(2026, 10, 6, 12, 0, tzinfo=timezone.utc)
+    qbs = saved_list.manual_free_agents("QB", now=fresh)
+    assert qbs["source"] == "manual" and qbs["as_of"].startswith("2026-10-05") and "offense only" in qbs["note"]
+    assert [p["name"] for p in qbs["players"]] == ["Example Quarterback", "Example Backup QB"]
+    assert {p["position"] for p in saved_list.manual_free_agents("W/R/T", now=fresh)["players"]} == {"RB", "WR", "TE"}
+    assert {p["position"] for p in saved_list.manual_free_agents("wr, te", now=fresh)["players"]} == {"WR", "TE"}
+    assert saved_list.manual_free_agents("DEF", now=fresh)["players"] == []
+    assert len(saved_list.manual_free_agents(limit=2, now=fresh)["players"]) == 2
+    assert saved_list.manual_free_agents(now=datetime(2026, 10, 12, 21, 38, tzinfo=timezone.utc)) is not None
+    assert saved_list.manual_free_agents(now=datetime(2026, 10, 12, 21, 40, tzinfo=timezone.utc)) is None
+
+
+def test_manual_free_agents_missing_file(saved_list, monkeypatch, tmp_path):
+    monkeypatch.setattr(saved_list, "MANUAL_FREE_AGENTS", tmp_path / "none.json")
+    assert saved_list.manual_free_agents() is None
+
+
+def test_free_agent_tool_falls_back_to_saved_list(saved_list, monkeypatch):
+    def boom():
+        raise YahooAccessError("401 not provisioned")
+    monkeypatch.setattr(mcp_server, "client", boom)
+    monkeypatch.setattr(saved_list, "FREE_AGENTS_MAX_AGE", saved_list.timedelta(days=36500))
+    out = mcp_server.get_free_agents(position="TE")
+    assert out["source"] == "manual" and "provisioned" in out["yahoo_error"]
+    assert [p["name"] for p in out["players"]] == ["Example Tight End"]
+    monkeypatch.setattr(saved_list, "FREE_AGENTS_MAX_AGE", saved_list.timedelta(0))
+    out = mcp_server.get_free_agents()
+    assert "provisioned" in out["error"] and "saved list" in out["error"]
