@@ -4,6 +4,10 @@
   uv run booth check   refresh the token and pull league settings (Milestone 1 check)
   uv run booth data-check   pull each external source once and print a short summary
   uv run booth report thu   generate a report (tue, thu, sat, sun) into reports/ and print it
+  uv run booth report thu --send   ...and deliver it (iMessage)
+  uv run booth run due      what launchd runs: build and send whichever report is due
+  uv run booth send-test    send a short test iMessage
+  uv run booth schedule install|uninstall|status|wake|test-send
 """
 
 from __future__ import annotations
@@ -124,15 +128,61 @@ def cmd_data_check(args: argparse.Namespace) -> int:
 
 
 def cmd_report(args: argparse.Namespace) -> int:
+    from booth.deliver import DeliveryError
+    from booth.jobs import LockBusy, lock, record_manual_delivery
     from booth.report import ReportError, generate
 
     try:
-        result = generate(args.run, week=args.week)
-    except ReportError as exc:
+        with lock():  # never alongside a scheduled run
+            result = generate(args.run, week=args.week)
+            print(result["message"])
+            print(f"\n[saved {result['path'].relative_to(ROOT)}; cost ${result['snapshot'].get('cost_usd') or 0:.2f}]")
+            if args.send:
+                from booth.deliver import send
+
+                print(f"[sent via {send(result['message'])}]")
+                if record_manual_delivery(args.run, result["snapshot"]["week"]):
+                    print("[marked delivered: the schedule won't send this report again]")
+    except LockBusy:
+        print("error: a scheduled Booth run is in progress; try again in a few minutes.", file=sys.stderr)
+        return 1
+    except (ReportError, DeliveryError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
-    print(result["message"])
-    print(f"\n[saved {result['path'].relative_to(ROOT)}; cost ${result['snapshot'].get('cost_usd') or 0:.2f}]")
+    return 0
+
+
+def cmd_run(args: argparse.Namespace) -> int:
+    from booth.jobs import run_due
+
+    outcome = run_due()
+    print(outcome)
+    return 1 if outcome.startswith("failed") else 0
+
+
+def cmd_send_test(args: argparse.Namespace) -> int:
+    from booth.deliver import DeliveryError, send
+
+    try:
+        ch = send("Booth test: if you can read this, report delivery works.")
+    except DeliveryError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    print(f"sent via {ch}")
+    return 0
+
+
+def cmd_schedule(args: argparse.Namespace) -> int:
+    from booth import schedule
+
+    action = {"install": schedule.install, "uninstall": schedule.uninstall,
+              "status": schedule.status, "wake": schedule.install_wake,
+              "test-send": schedule.test_send}[args.action]
+    try:
+        print(action())
+    except (RuntimeError, FileNotFoundError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
     return 0
 
 
@@ -152,7 +202,15 @@ def main(argv: list[str] | None = None) -> int:
     p_rep = sub.add_parser("report", help="generate a report now")
     p_rep.add_argument("run", choices=["tue", "thu", "sat", "sun"])
     p_rep.add_argument("--week", type=int, help="NFL week (default: current week)")
+    p_rep.add_argument("--send", action="store_true", help="also deliver it")
     p_rep.set_defaults(func=cmd_report)
+    p_run = sub.add_parser("run", help="scheduled entrypoint")
+    p_run.add_argument("what", choices=["due"])
+    p_run.set_defaults(func=cmd_run)
+    sub.add_parser("send-test", help="send a test message").set_defaults(func=cmd_send_test)
+    p_sch = sub.add_parser("schedule", help="manage the launchd job (macOS)")
+    p_sch.add_argument("action", choices=["install", "uninstall", "status", "wake", "test-send"])
+    p_sch.set_defaults(func=cmd_schedule)
     args = parser.parse_args(argv)
     try:
         return args.func(args)
