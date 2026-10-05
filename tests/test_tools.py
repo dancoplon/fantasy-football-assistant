@@ -149,8 +149,16 @@ def test_other_tools_return_error_not_crash(monkeypatch):
     assert "error" in mcp_server.get_standings()
 
 
-def test_server_lists_six_read_only_tools():
+def test_server_lists_read_only_tools():
     tools = asyncio.run(mcp_server.mcp.list_tools())
     assert {t.name for t in tools} == {"get_league_settings", "get_my_roster", "get_free_agents",
-                                       "get_matchup", "get_transactions", "get_standings"}
+                                       "get_matchup", "get_transactions", "get_standings",
+                                       "get_league_context", "get_schedule", "get_player_usage",
+                                       "get_injury_report", "get_trending_players", "get_game_weather"}
     assert all(t.annotations.read_only_hint for t in tools)
+
+
+def test_league_context_loads():
+    ctx = mcp_server.get_league_context()
+    assert ctx["league"]["scoring"]["reception"] == 0.5
+    assert "Contending" in ctx["strategy"] or "contending" in ctx["strategy"]

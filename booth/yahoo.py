@@ -14,7 +14,8 @@ class YahooAccessError(RuntimeError):
 
 def _explain(exc: Exception) -> YahooAccessError:
     text = str(exc)
-    if "401" in text or "403" in text or "forbidden" in text.lower():
+    lowered = text.lower()
+    if "401" in text or "403" in text or "forbidden" in lowered or "not authorized" in lowered:
         return YahooAccessError(
             "OAuth worked but the Fantasy API refused the request (401/403). "
             "Yahoo may not have provisioned API access for the app yet. "

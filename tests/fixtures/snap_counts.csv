@@ -1,0 +1,11 @@
+game_id,pfr_game_id,season,game_type,week,player,pfr_player_id,position,team,opponent,offense_snaps,offense_pct,defense_snaps,defense_pct,st_snaps,st_pct
+2026_01_BUF_HOU,202609130htx,2026,REG,1,Nico Collins,CollNi00,WR,HOU,BUF,57,0.72,0,0,0,0
+2026_01_CHI_CAR,202609130car,2026,REG,1,Rome Odunze,OdunRo00,WR,CHI,CAR,36,0.48,0,0,1,0.03
+2026_01_DEN_KC,202609140kan,2026,REG,1,J.K. Dobbins,DobbJK00,RB,DEN,KC,22,0.43,0,0,0,0
+2026_02_JAX_DEN,202609200den,2026,REG,2,J.K. Dobbins,DobbJK00,RB,DEN,JAX,21,0.34,0,0,0,0
+2026_02_MIN_CHI,202609200chi,2026,REG,2,Rome Odunze,OdunRo00,WR,CHI,MIN,62,0.84,0,0,0,0
+2026_03_LA_DEN,202609270den,2026,REG,3,J.K. Dobbins,DobbJK00,RB,DEN,LA,33,0.49,0,0,0,0
+2026_03_PHI_CHI,202609280chi,2026,REG,3,Rome Odunze,OdunRo00,WR,CHI,PHI,61,0.85,0,0,0,0
+2026_04_DAL_HOU,202610040htx,2026,REG,4,Nico Collins,CollNi00,WR,HOU,DAL,38,0.69,0,0,0,0
+2026_04_DEN_SF,202610040sfo,2026,REG,4,J.K. Dobbins,DobbJK00,RB,DEN,SF,21,0.32,0,0,0,0
+2026_04_NYJ_CHI,202610040chi,2026,REG,4,Rome Odunze,OdunRo00,WR,CHI,NYJ,83,0.89,0,0,0,0

@@ -1,0 +1,14 @@
+season,season_type,game_type,team,week,gsis_id,position,full_name,first_name,last_name,report_primary_injury,report_secondary_injury,report_status,practice_primary_injury,practice_secondary_injury,practice_status
+2026,REG,REG,KC,1,00-0039067,WR,Rashee Rice,Rashee,Rice,,,,Knee,,Full Participation in Practice
+2026,REG,REG,KC,2,00-0039067,WR,Rashee Rice,Rashee,Rice,,,,Knee,,Full Participation in Practice
+2026,REG,REG,KC,3,00-0039067,WR,Rashee Rice,Rashee,Rice,,,,Knee,,Full Participation in Practice
+2026,REG,REG,NYJ,3,00-0040736,TE,Mason Taylor,Mason,Taylor,Thumb,,Out,Thumb,,Did Not Participate In Practice
+2026,REG,REG,KC,4,00-0039067,WR,Rashee Rice,Rashee,Rice,,,,Knee,,Full Participation in Practice
+2026,REG,REG,MIN,4,00-0029606,S,Harrison Smith,Harrison,Smith,,,,Not injury related - resting player,,Limited Participation in Practice
+2026,REG,REG,MIN,4,00-0033293,RB,Aaron Jones,Aaron,Jones,,,,Not injury related - resting player,,Limited Participation in Practice
+2026,REG,REG,MIN,4,00-0035276,LB,Blake Cashman,Blake,Cashman,,,,Elbow,,Full Participation in Practice
+2026,REG,REG,MIN,4,00-0036322,WR,Justin Jefferson,Justin,Jefferson,Ankle,,Out,Ankle,,Did Not Participate In Practice
+2026,REG,REG,MIN,4,00-0036616,T,Christian Darrisaw,Christian,Darrisaw,,,,Not injury related - resting player,,Did Not Participate In Practice
+2026,REG,REG,MIN,4,00-0041083,CB,Charles Demmings,Charles,Demmings,Hamstring,,Out,Hamstring,,Did Not Participate In Practice
+2026,REG,REG,MIN,4,00-0041581,P,Brett Thorson,Brett,Thorson,Hamstring,,Out,Hamstring,,Did Not Participate In Practice
+2026,REG,REG,NYJ,4,00-0040736,TE,Mason Taylor,Mason,Taylor,Thumb,,Out,Thumb,,Did Not Participate In Practice

@@ -1,4 +1,4 @@
-"""Booth's Yahoo Fantasy MCP server: six read-only tools for one league.
+"""Booth's MCP server: six read-only Yahoo tools for one league, plus external data tools.
 
 Run with `uv run booth-mcp` (stdio). Claude Code picks it up from .mcp.json.
 """
@@ -10,6 +10,9 @@ from mcp.types import ToolAnnotations
 
 from booth.auth import AuthError
 from booth.config import ConfigError, Settings
+from booth.context import league_config, strategy_text
+from booth.data import nflverse, sleeper, weather
+from booth.data.cache import DataSourceError
 from booth.manual import manual_roster
 from booth.yahoo import YahooAccessError, YahooClient
 
@@ -99,6 +102,76 @@ def get_standings() -> list[dict] | dict:
     try:
         return client().standings()
     except (ConfigError, AuthError, YahooAccessError) as exc:
+        return _error(exc)
+
+
+# --- External data (no Yahoo needed) ------------------------------------------
+
+
+@mcp.tool(annotations=READ_ONLY)
+def get_league_context() -> dict:
+    """League rules (scoring, roster slots, waivers, deadlines) and Dan's strategy notes. Read this first on every run."""
+    return {"league": league_config(), "strategy": strategy_text()}
+
+
+@mcp.tool(annotations=READ_ONLY)
+def get_schedule(week: int | None = None) -> dict:
+    """NFL schedule for a week: kickoff times (ET), bye teams, stadium/roof, Vegas spread and total,
+    and each team's implied points. week: omit for the current week (rolls forward on Tuesday)."""
+    try:
+        games = nflverse.games()
+        return nflverse.schedule(week or nflverse.current_week(games), games)
+    except DataSourceError as exc:
+        return _error(exc)
+
+
+@mcp.tool(annotations=READ_ONLY)
+def get_player_usage(
+    names: list[str] | None = None,
+    team: str | None = None,
+    position: str | None = None,
+    last_n_weeks: int = 3,
+) -> list[dict] | dict:
+    """Recent usage from nflverse play-by-play: snap %, targets, target share, carries, yards, TDs,
+    and points in this league's half-PPR scoring, week by week. Filter by names, NFL team (e.g. "HOU"),
+    and/or position. Data updates the day after games."""
+    try:
+        return nflverse.player_usage(names=names, team=team, position=position, last_n_weeks=last_n_weeks)
+    except DataSourceError as exc:
+        return _error(exc)
+
+
+@mcp.tool(annotations=READ_ONLY)
+def get_injury_report(week: int | None = None, names: list[str] | None = None, teams: list[str] | None = None) -> dict:
+    """The NFL's official injury report (game status: Out/Doubtful/Questionable, plus practice participation).
+    Published Wednesday through Friday; cite the returned source URL when quoting it."""
+    try:
+        return nflverse.injury_report(week=week, names=names, teams=teams)
+    except DataSourceError as exc:
+        return _error(exc)
+
+
+@mcp.tool(annotations=READ_ONLY)
+def get_trending_players(
+    direction: str = "add", lookback_hours: int = 24, limit: int = 25, position: str | None = None
+) -> list[dict] | dict:
+    """Most-added or most-dropped players across Sleeper fantasy leagues (waiver-wire momentum).
+    direction: "add" or "drop". position: QB, RB, WR, TE, K, DEF, or omit."""
+    try:
+        return sleeper.trending(direction=direction, lookback_hours=lookback_hours, limit=limit, position=position)
+    except (DataSourceError, ValueError) as exc:
+        return _error(exc)
+
+
+@mcp.tool(annotations=READ_ONLY)
+def get_game_weather(week: int | None = None) -> list[dict] | dict:
+    """Kickoff-window forecast (Open-Meteo) for every game in a week, with fantasy flags for wind,
+    rain/snow, and cold. Indoor games are marked; forecasts more than 3 days out are low confidence."""
+    try:
+        games = nflverse.games()
+        sched = nflverse.schedule(week or nflverse.current_week(games), games)
+        return weather.game_weather(sched["games"])
+    except DataSourceError as exc:
         return _error(exc)
 
 
