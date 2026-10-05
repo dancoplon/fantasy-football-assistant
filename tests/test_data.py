@@ -156,3 +156,16 @@ def test_every_stadium_in_fixture_has_coordinates(games):
     import json
     stadiums = json.loads((Path(__file__).parent.parent / "config" / "stadiums.json").read_text())
     assert {g["stadium_id"] for g in games} <= set(stadiums)
+
+
+def test_weather_one_failed_forecast_doesnt_sink_the_rest(games):
+    sched = nflverse.schedule(6, games)["games"]
+
+    def flaky(lat, lon, day):
+        if day == "2026-10-15":
+            raise cache.DataSourceError("timeout")
+        return _forecast(day, 13)
+
+    out = weather.game_weather(sched, today=date(2026, 10, 14), fetch_forecast=flaky)
+    assert next(o for o in out if o["game"] == "SEA@DEN")["error"] == "timeout"
+    assert any(o.get("kickoff_hour") for o in out)

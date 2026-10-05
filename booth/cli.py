@@ -107,11 +107,16 @@ def cmd_data_check(args: argparse.Namespace) -> int:
     run("Sleeper trending adds", lambda: ", ".join(p["name"] for p in sleeper.trending(limit=5)))
 
     def wx():
-        wk = nflverse.current_week(games)
+        # Next week's games, so the forecast API is actually exercised even on a Monday
+        # when the only game left in the current week is indoors.
+        wk = min(nflverse.current_week(games) + 1, max(int(g["week"]) for g in games))
         out = weather.game_weather(nflverse.schedule(wk, games)["games"])
-        fetched = [o for o in out if "kickoff_hour" in o]
+        errors = [o["error"] for o in out if o.get("error")]
+        if errors:
+            raise RuntimeError(f"{len(errors)} forecast(s) failed, e.g. {errors[0]}")
+        fetched = [o for o in out if o.get("kickoff_hour")]
         flagged = [f"{o['game']}: {'; '.join(o['flags'])}" for o in out if o["flags"]]
-        return f"{len(fetched)} outdoor forecasts; flags: {' | '.join(flagged) or 'none'}"
+        return f"week {wk}: {len(fetched)} outdoor forecasts; flags: {' | '.join(flagged) or 'none'}"
 
     run("Open-Meteo weather", wx)
     return 1 if failures else 0

@@ -10,7 +10,7 @@ import json
 from datetime import date
 
 from booth.config import ROOT
-from booth.data.cache import get_json
+from booth.data.cache import DataSourceError, get_json
 
 FORECAST_URL = "https://api.open-meteo.com/v1/forecast"
 STADIUMS = ROOT / "config" / "stadiums.json"
@@ -94,7 +94,11 @@ def game_weather(games: list[dict], today: date | None = None, fetch_forecast=No
         if not st:
             out.append({**entry, "note": f"no coordinates for {g['stadium']}", "flags": []})
             continue
-        hours = _game_hours(fetch_forecast(st["lat"], st["lon"], g["date"]), g["date"], g["kickoff_et"])
+        try:
+            hours = _game_hours(fetch_forecast(st["lat"], st["lon"], g["date"]), g["date"], g["kickoff_et"])
+        except DataSourceError as exc:
+            out.append({**entry, "error": str(exc), "flags": []})
+            continue
         flags = flags_for(hours)
         if flags and g["roof"].startswith("retractable"):
             flags = [f + " (retractable roof may be closed)" for f in flags]
