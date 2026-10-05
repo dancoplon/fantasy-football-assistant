@@ -12,7 +12,7 @@ import sys
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
-from booth.auth import AuthError, authorize_interactive
+from booth.auth import AuthError, authorization_url, authorize_interactive, exchange_code, extract_code
 from booth.config import ROOT, ConfigError, Settings
 from booth.yahoo import YahooAccessError, get_league, get_league_settings, waiver_claim_times
 
@@ -40,7 +40,13 @@ SUMMARY_KEYS = [
 
 def cmd_auth(args: argparse.Namespace) -> int:
     settings = Settings.load()
-    authorize_interactive(settings, open_browser=not args.no_browser)
+    if args.url_only:
+        print(authorization_url(settings))
+        return 0
+    if args.code:
+        exchange_code(settings, extract_code(args.code))
+    else:
+        authorize_interactive(settings, open_browser=not args.no_browser)
     print(f"\nAuthorized. Tokens saved to {settings.token_file.relative_to(ROOT)}.")
     print("Next: uv run booth check")
     return 0
@@ -76,6 +82,11 @@ def main(argv: list[str] | None = None) -> int:
     sub = parser.add_subparsers(dest="command", required=True)
     p_auth = sub.add_parser("auth", help="one-time Yahoo authorization")
     p_auth.add_argument("--no-browser", action="store_true", help="print the URL instead of opening it")
+    # Non-interactive two-step form, for when someone else drives the terminal:
+    #   booth auth --url-only           -> open the printed URL, approve
+    #   booth auth --code "<redirect URL or code>"
+    p_auth.add_argument("--url-only", action="store_true", help="print the consent URL and exit")
+    p_auth.add_argument("--code", help="finish auth with the pasted redirect URL (or bare code)")
     p_auth.set_defaults(func=cmd_auth)
     sub.add_parser("check", help="refresh token and pull league settings").set_defaults(func=cmd_check)
     args = parser.parse_args(argv)
