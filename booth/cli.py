@@ -2,6 +2,7 @@
 
   uv run booth auth    one-time Yahoo authorization (opens a browser)
   uv run booth check   refresh the token and pull league settings (Milestone 1 check)
+  uv run booth data-check   pull each external source once and print a short summary
 """
 
 from __future__ import annotations
@@ -77,6 +78,45 @@ def cmd_check(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_data_check(args: argparse.Namespace) -> int:
+    """Smoke-test every external source. Prints one line per source; exit 1 if any failed."""
+    from booth.data import nflverse, sleeper, weather
+
+    failures = 0
+
+    def run(label, fn):
+        nonlocal failures
+        try:
+            print(f"  OK    {label}: {fn()}")
+        except Exception as exc:  # report and keep going; this is a diagnostic
+            failures += 1
+            print(f"  FAIL  {label}: {exc}")
+
+    print("External data sources:")
+    games: list = []
+
+    def sched():
+        games.extend(nflverse.games())
+        wk = nflverse.current_week(games)
+        s = nflverse.schedule(wk, games)
+        return f"week {wk}, {len(s['games'])} games, byes {', '.join(s['byes']) or 'none'}"
+
+    run("nflverse schedule", sched)
+    run("nflverse usage", lambda: f"{len(nflverse.player_usage(last_n_weeks=1))} players with stats last week")
+    run("nflverse injury report", lambda: (lambda r: f"week {r['week']}, {len(r['entries'])} entries")(nflverse.injury_report()))
+    run("Sleeper trending adds", lambda: ", ".join(p["name"] for p in sleeper.trending(limit=5)))
+
+    def wx():
+        wk = nflverse.current_week(games)
+        out = weather.game_weather(nflverse.schedule(wk, games)["games"])
+        fetched = [o for o in out if "kickoff_hour" in o]
+        flagged = [f"{o['game']}: {'; '.join(o['flags'])}" for o in out if o["flags"]]
+        return f"{len(fetched)} outdoor forecasts; flags: {' | '.join(flagged) or 'none'}"
+
+    run("Open-Meteo weather", wx)
+    return 1 if failures else 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="booth")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -89,6 +129,7 @@ def main(argv: list[str] | None = None) -> int:
     p_auth.add_argument("--code", help="finish auth with the pasted redirect URL (or bare code)")
     p_auth.set_defaults(func=cmd_auth)
     sub.add_parser("check", help="refresh token and pull league settings").set_defaults(func=cmd_check)
+    sub.add_parser("data-check", help="pull each external data source once").set_defaults(func=cmd_data_check)
     args = parser.parse_args(argv)
     try:
         return args.func(args)

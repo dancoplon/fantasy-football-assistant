@@ -1,0 +1,54 @@
+{
+  "_note": "UTA Hall of Famers settings, seeded from Dan's brief (Oct 5 2026). Replace with Yahoo's values once `booth check` works; Yahoo wins if they differ.",
+  "league": {
+    "name": "UTA Hall of Famers",
+    "yahoo_league_id": "890283",
+    "teams": 12,
+    "format": "head-to-head",
+    "type": "dynasty",
+    "keepers": true,
+    "cash_league": false
+  },
+  "roster": {
+    "starters": ["QB", "RB", "RB", "WR", "WR", "TE", "W/R/T", "W/R/T", "K", "DEF"],
+    "bench": 15,
+    "ir": 3,
+    "superflex": false,
+    "te_premium": false
+  },
+  "scoring": {
+    "reception": 0.5,
+    "pass_yards_per_point": 25,
+    "pass_td": 4,
+    "interception": -2,
+    "rush_rec_yards_per_point": 10,
+    "rush_rec_td": 6,
+    "fumble_lost": -2,
+    "two_point": 2,
+    "fractional_points": true,
+    "negative_points": true,
+    "kicker": {"fg_0_39": 3, "fg_40_49": 4, "fg_50_plus": 5, "pat": 1},
+    "defense": {
+      "sack": 1, "interception": 2, "fumble_recovery": 2, "td": 6, "safety": 2, "block": 2,
+      "points_allowed": {"0": 10, "1-6": 7, "7-13": 4, "14-20": 1, "21-27": 0, "28-34": -1, "35+": -4}
+    }
+  },
+  "waivers": {
+    "type": "FAB",
+    "tiebreak": "continual rolling list",
+    "weekly_waivers": "Game Time - Tuesday",
+    "waiver_period_days": 2,
+    "acquisition_limits": null,
+    "injured_players_direct_to_ir": false,
+    "claim_processing_time_et": "UNVERIFIED: read from past claims once Yahoo access works (booth check)"
+  },
+  "trade_deadline": "2026-11-28",
+  "draft_pick_trades": true,
+  "playoffs": {"teams": 6, "weeks": [15, 16, 17]},
+  "my_team": {
+    "name": "Mayor of Titty City",
+    "short": "MOTC",
+    "faab_budget_remaining": 100,
+    "record_entering_week_4": "1-2"
+  }
+}

@@ -50,4 +50,17 @@ Tokens are saved to `secrets/yahoo_token.json` (owner-only permissions, gitignor
 
 If Yahoo can't be reached (no token yet, or API access not provisioned), `get_my_roster` falls back to `config/manual_roster.json` and says so (`"source": "manual"`). Keep that file current by hand until Yahoo access works.
 
+## External data and league context
+
+The same MCP server also exposes free public data, none of which needs Yahoo:
+
+- `get_schedule`: kickoff times (ET), byes, roof, Vegas spread/total and implied team points (nflverse)
+- `get_player_usage`: weekly snap %, targets, target share, carries, and half-PPR points (nflverse)
+- `get_injury_report`: the NFL's official Wed-Fri injury report (nflverse)
+- `get_trending_players`: most-added/dropped players across Sleeper leagues
+- `get_game_weather`: kickoff-window forecast with wind/rain/snow/cold flags (Open-Meteo)
+- `get_league_context`: `config/league.json` (league rules) and `config/strategy.md` (strategy, in plain English)
+
+Downloads are cached in `state/cache/`; if a source is down, the last good copy is used. `uv run booth data-check` pulls each source once and prints a summary.
+
 Run the tests with `uv run pytest`.
