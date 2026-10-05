@@ -1,0 +1,185 @@
+{
+  "_note": "Fallback used only when the Yahoo API is unreachable or not yet provisioned. Seeded from the project brief; update by hand if the roster changes before Yahoo access works.",
+  "as_of": "2026-10-05",
+  "team_name": "Mayor of Titty City",
+  "faab_remaining": 100,
+  "ir_slots_used": 0,
+  "ir_slots_total": 3,
+  "players": [
+    {
+      "name": "Joe Burrow",
+      "position": "QB",
+      "nfl_team": "CIN",
+      "bye_week": 6,
+      "status": ""
+    },
+    {
+      "name": "Kyler Murray",
+      "position": "QB",
+      "nfl_team": "MIN",
+      "bye_week": 6,
+      "status": ""
+    },
+    {
+      "name": "Jonathan Taylor",
+      "position": "RB",
+      "nfl_team": "IND",
+      "bye_week": 13,
+      "status": ""
+    },
+    {
+      "name": "J.K. Dobbins",
+      "position": "RB",
+      "nfl_team": "DEN",
+      "bye_week": 10,
+      "status": ""
+    },
+    {
+      "name": "Tyjae Spears",
+      "position": "RB",
+      "nfl_team": "TEN",
+      "bye_week": 9,
+      "status": ""
+    },
+    {
+      "name": "Tank Bigsby",
+      "position": "RB",
+      "nfl_team": "PHI",
+      "bye_week": 10,
+      "status": "Q"
+    },
+    {
+      "name": "Mike Washington Jr.",
+      "position": "RB",
+      "nfl_team": "LV",
+      "bye_week": 13,
+      "status": ""
+    },
+    {
+      "name": "DJ Giddens",
+      "position": "RB",
+      "nfl_team": "IND",
+      "bye_week": 13,
+      "status": "NA"
+    },
+    {
+      "name": "Demond Claiborne",
+      "position": "RB",
+      "nfl_team": "MIN",
+      "bye_week": 6,
+      "status": ""
+    },
+    {
+      "name": "Devin Singletary",
+      "position": "RB",
+      "nfl_team": "NYG",
+      "bye_week": 8,
+      "status": "NA"
+    },
+    {
+      "name": "Nico Collins",
+      "position": "WR",
+      "nfl_team": "HOU",
+      "bye_week": 8,
+      "status": ""
+    },
+    {
+      "name": "Rome Odunze",
+      "position": "WR",
+      "nfl_team": "CHI",
+      "bye_week": 10,
+      "status": ""
+    },
+    {
+      "name": "Rashee Rice",
+      "position": "WR",
+      "nfl_team": "KC",
+      "bye_week": 5,
+      "status": "Q"
+    },
+    {
+      "name": "Justin Jefferson",
+      "position": "WR",
+      "nfl_team": "MIN",
+      "bye_week": 6,
+      "status": "O"
+    },
+    {
+      "name": "Kayshon Boutte",
+      "position": "WR",
+      "nfl_team": "HOU",
+      "bye_week": 8,
+      "status": ""
+    },
+    {
+      "name": "KC Concepcion Jr.",
+      "position": "WR",
+      "nfl_team": "CLE",
+      "bye_week": 11,
+      "status": ""
+    },
+    {
+      "name": "Darnell Mooney",
+      "position": "WR",
+      "nfl_team": "NYG",
+      "bye_week": 8,
+      "status": ""
+    },
+    {
+      "name": "Jalen Nailor",
+      "position": "WR",
+      "nfl_team": "LV",
+      "bye_week": 13,
+      "status": "Q"
+    },
+    {
+      "name": "Tucker Kraft",
+      "position": "TE",
+      "nfl_team": "GB",
+      "bye_week": 11,
+      "status": ""
+    },
+    {
+      "name": "Sam LaPorta",
+      "position": "TE",
+      "nfl_team": "DET",
+      "bye_week": 6,
+      "status": ""
+    },
+    {
+      "name": "Jake Ferguson",
+      "position": "TE",
+      "nfl_team": "DAL",
+      "bye_week": 14,
+      "status": ""
+    },
+    {
+      "name": "Mason Taylor",
+      "position": "TE",
+      "nfl_team": "NYJ",
+      "bye_week": 13,
+      "status": "O"
+    },
+    {
+      "name": "Brandon Aubrey",
+      "position": "K",
+      "nfl_team": "DAL",
+      "bye_week": 14,
+      "status": ""
+    },
+    {
+      "name": "Seattle Seahawks",
+      "position": "DEF",
+      "nfl_team": "SEA",
+      "bye_week": 11,
+      "status": ""
+    },
+    {
+      "name": "Houston Texans",
+      "position": "DEF",
+      "nfl_team": "HOU",
+      "bye_week": 8,
+      "status": ""
+    }
+  ]
+}
