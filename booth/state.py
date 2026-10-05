@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import os
+import time
 from pathlib import Path
 
 from booth.config import ROOT
@@ -30,8 +31,23 @@ def week_path(season: int, week: int, base: Path | None = None) -> Path:
 def load_week(season: int, week: int, base: Path | None = None) -> dict:
     path = week_path(season, week, base)
     if path.exists():
-        return json.loads(path.read_text())
+        try:
+            return json.loads(path.read_text())
+        except json.JSONDecodeError:
+            # A damaged file (e.g. a full disk mid-write) must not stop the rest of the week's
+            # reports. Keep it for inspection and start the week fresh.
+            path.replace(path.with_name(f"{path.name}.corrupt-{int(time.time())}"))
     return {"season": season, "week": week, "runs": {}}
+
+
+def write_week(data: dict, base: Path | None = None) -> Path:
+    """Write a week file atomically, so a crash or full disk never leaves it half-written."""
+    path = week_path(data["season"], data["week"], base)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(".tmp")
+    tmp.write_text(json.dumps(data, indent=2))
+    tmp.replace(path)
+    return path
 
 
 def prior_snapshot(season: int, week: int, run: str, base: Path | None = None) -> dict | None:
@@ -51,10 +67,7 @@ def save_snapshot(snapshot: dict, base: Path | None = None) -> Path:
     base.mkdir(parents=True, exist_ok=True)
     data = load_week(snapshot["season"], snapshot["week"], base)
     data["runs"][snapshot["run"]] = snapshot
-    path = week_path(snapshot["season"], snapshot["week"], base)
-    tmp = path.with_suffix(".tmp")
-    tmp.write_text(json.dumps(data, indent=2))
-    tmp.replace(path)
+    path = write_week(data, base)
     latest = base / "latest.json"
     if latest.is_symlink() or latest.exists():
         latest.unlink()

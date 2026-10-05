@@ -1,4 +1,5 @@
 import json
+import sys
 from datetime import datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -70,8 +71,8 @@ def test_state_store_roundtrip_and_prior(tmp_path):
 
 def test_prompt_fills_placeholders():
     now = datetime(2026, 10, 13, 8, 0, tzinfo=ZoneInfo("America/New_York"))
-    p = report.build_prompt("tue", 6, now, "Thursday 8:15 PM ET, SEA@DEN")
-    assert "week 6" in p and "Tuesday" in p and "QB streamer" in p
+    p = report.build_prompt("tue", 6, now, "Thursday 8:15 PM ET, SEA@DEN", "none yet")
+    assert "week 6" in p and "Tuesday" in p and "8:00 AM ET" in p and "QB streamer" in p
     assert "{" not in p.replace("{}", "")
 
 
@@ -117,6 +118,38 @@ def test_generate_thu_then_sat_adds_change_header(isolated):
     assert (isolated / "reports" / "2026-wk05-sun.txt").exists()
 
 
-def test_tnf_kickoff_label():
+def test_early_and_locked_games():
     games = nflverse.games(path=FIX / "games.csv")
-    assert report.tnf_kickoff_for(5, games) == "Thursday 8:15 PM ET, TB@DAL"
+    assert report.early_games_for(5, games) == "Thursday 8:15 PM ET, TB@DAL"
+    sun_10am = datetime(2026, 10, 11, 10, 0, tzinfo=ZoneInfo("America/New_York"))
+    assert report.locked_games_at(5, games, sun_10am) == "TB@DAL; PHI@JAX"
+
+
+def _stream(*events):
+    return "\n".join(json.dumps(e) for e in events)
+
+
+INIT_OK = {"type": "system", "subtype": "init", "mcp_servers": [{"name": "yahoo-fantasy", "status": "connected"}]}
+TOOL = {"type": "assistant", "message": {"content": [{"type": "tool_use", "name": "mcp__yahoo-fantasy__get_my_roster"}]}}
+RESULT = {"type": "result", "subtype": "success", "is_error": False, "structured_output": {"message": "hi"}, "total_cost_usd": 0.3}
+
+
+def test_parse_stream_accepts_a_report_built_from_booth_data():
+    out = report.parse_stream(_stream(INIT_OK, TOOL, RESULT))
+    assert out["structured_output"] == {"message": "hi"} and out["total_cost_usd"] == 0.3
+
+
+@pytest.mark.parametrize("events,match", [
+    ((dict(INIT_OK, mcp_servers=[{"name": "yahoo-fantasy", "status": "failed"}]), RESULT), "didn't start"),
+    ((INIT_OK, RESULT), "without using any of Booth's data tools"),
+    ((INIT_OK, TOOL, dict(RESULT, is_error=True, subtype="error_max_turns")), "error_max_turns"),
+    ((INIT_OK, TOOL), "Unexpected output"),
+])
+def test_parse_stream_rejects_guesswork(events, match):
+    with pytest.raises(report.ReportError, match=match):
+        report.parse_stream(_stream(*events))
+
+
+def test_mcp_server_starts_with_this_python():
+    cfg = json.loads(report.mcp_config())["mcpServers"]["yahoo-fantasy"]
+    assert cfg["command"] == sys.executable and cfg["args"] == ["-m", "booth.mcp_server"]

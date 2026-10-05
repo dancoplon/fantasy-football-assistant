@@ -12,7 +12,8 @@ from __future__ import annotations
 import json
 import os
 import subprocess
-from datetime import datetime
+import sys
+from datetime import date, datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -88,21 +89,25 @@ SNAPSHOT_SCHEMA = {
     "required": ["message", "lineup", "bench_flags", "waiver_recs", "weather_flags", "sources"],
 }
 
-ALLOWED_TOOLS = ["mcp__yahoo-fantasy", "WebSearch", "WebFetch"]
+MCP_SERVER = "yahoo-fantasy"
+ALLOWED_TOOLS = [f"mcp__{MCP_SERVER}", "WebSearch", "WebFetch"]
 
 
 class ReportError(RuntimeError):
     pass
 
 
-def build_prompt(run: str, week: int, now: datetime, tnf_kickoff: str = "Thursday 8:15 PM ET") -> str:
+def build_prompt(run: str, week: int, now: datetime, early_games: str = "Thursday 8:15 PM ET",
+                 locked_games: str = "none") -> str:
     fields = {
         "week": week,
         "today": now.strftime("%Y-%m-%d"),
         "weekday": now.strftime("%A"),
+        "time": now.astimezone(EASTERN).strftime("%-I:%M %p"),
         "run_label": RUN_LABELS[run],
         "length_hint": LENGTH_HINTS[run],
-        "tnf_kickoff": tnf_kickoff,
+        "early_games": early_games,
+        "locked_games": locked_games,
     }
     text = (PROMPTS / "common.md").read_text() + "\n" + (PROMPTS / f"{run}.md").read_text()
     for k, v in fields.items():
@@ -123,15 +128,53 @@ def claude_bin() -> str:
     return str(local) if local.exists() else "claude"
 
 
+def mcp_config() -> str:
+    """Booth's MCP server, started with this same Python so it doesn't depend on PATH
+    (launchd gives jobs a minimal one)."""
+    return json.dumps({"mcpServers": {MCP_SERVER: {"command": sys.executable, "args": ["-m", "booth.mcp_server"]}}})
+
+
+def parse_stream(stdout: str, returncode: int = 0, stderr: str = "") -> dict:
+    """Pull the result out of `--output-format stream-json`, and check the report was
+    built from Booth's data: the MCP server connected and at least one of its tools ran.
+    Otherwise Claude may still return a well-formed report that is guesswork."""
+    init, result, tools = None, None, []
+    for line in stdout.splitlines():
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        kind = event.get("type")
+        if kind == "system" and event.get("subtype") == "init":
+            init = event
+        elif kind == "assistant":
+            for block in (event.get("message") or {}).get("content") or []:
+                if isinstance(block, dict) and block.get("type") == "tool_use":
+                    tools.append(block.get("name", ""))
+        elif kind == "result":
+            result = event
+    if result is None:
+        raise ReportError(f"Unexpected output from claude (exit {returncode}): {stderr[-500:] or stdout[-500:]}")
+    if result.get("is_error") or not result.get("structured_output"):
+        raise ReportError(f"Claude run failed: {result.get('subtype')} {str(result.get('result'))[:300]}")
+    servers = {s.get("name"): s.get("status") for s in (init or {}).get("mcp_servers") or []}
+    if servers.get(MCP_SERVER) != "connected":
+        raise ReportError(f"Booth's Yahoo data server didn't start (status: {servers.get(MCP_SERVER, 'missing')}).")
+    if not any(name.startswith(f"mcp__{MCP_SERVER}__") for name in tools):
+        raise ReportError("Claude wrote the report without using any of Booth's data tools.")
+    return result
+
+
 def run_claude(prompt: str, timeout: int = 900) -> dict:
-    """Run `claude -p` with Booth's MCP server and return its structured output."""
+    """Run `claude -p` with Booth's MCP server and return its result (with structured_output)."""
     cmd = [
         claude_bin(),
         "-p",
         prompt,
-        "--output-format", "json",
+        "--output-format", "stream-json",
+        "--verbose",
         "--json-schema", json.dumps(SNAPSHOT_SCHEMA),
-        "--mcp-config", str(ROOT / ".mcp.json"),
+        "--mcp-config", mcp_config(),
         "--strict-mcp-config",
         "--permission-mode", "dontAsk",
         "--allowedTools", *ALLOWED_TOOLS,
@@ -139,29 +182,38 @@ def run_claude(prompt: str, timeout: int = 900) -> dict:
     if os.getenv("BOOTH_MODEL"):
         cmd += ["--model", os.environ["BOOTH_MODEL"]]
     try:
-        proc = subprocess.run(cmd, cwd=ROOT, capture_output=True, text=True, timeout=timeout)
+        proc = subprocess.run(cmd, cwd=ROOT, stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=timeout)
     except FileNotFoundError as exc:
         raise ReportError("Claude Code isn't installed or not on PATH (set BOOTH_CLAUDE_BIN).") from exc
     except subprocess.TimeoutExpired as exc:
         raise ReportError(f"Claude didn't finish within {timeout // 60} minutes.") from exc
-    try:
-        out = json.loads(proc.stdout)
-    except json.JSONDecodeError as exc:
-        raise ReportError(f"Unexpected output from claude (exit {proc.returncode}): {proc.stderr[-500:] or proc.stdout[-500:]}") from exc
-    if out.get("is_error") or not out.get("structured_output"):
-        raise ReportError(f"Claude run failed: {out.get('subtype')} {str(out.get('result'))[:300]}")
-    return out
+    return parse_stream(proc.stdout, proc.returncode, proc.stderr)
 
 
-def tnf_kickoff_for(week: int, games: list[dict]) -> str:
-    sched = nflverse.schedule(week, games)["games"]
-    thursday = [g for g in sched if g["day"] == "Thursday"]
-    if not thursday:
-        return "no Thursday game this week"
-    g = thursday[0]
+def _kickoff(g: dict) -> datetime:
+    d = date.fromisoformat(g["date"])
     hh, mm = (int(x) for x in g["kickoff_et"].split(":"))
-    t = datetime(2000, 1, 1, hh, mm).strftime("%-I:%M %p")
-    return f"Thursday {t} ET, {g['away']}@{g['home']}"
+    return datetime(d.year, d.month, d.day, hh, mm, tzinfo=EASTERN)
+
+
+def _game_label(g: dict) -> str:
+    return f"{g['day']} {_kickoff(g).strftime('%-I:%M %p')} ET, {g['away']}@{g['home']}"
+
+
+def early_games_for(week: int, games: list[dict]) -> str:
+    """Games before the main Sunday slate (Thursday night, plus Wednesday, Thanksgiving,
+    Friday or Saturday games): each one locks its players at kickoff."""
+    sched = nflverse.schedule(week, games)["games"]
+    sundays = sorted(g["date"] for g in sched if g["day"] == "Sunday")
+    early = [g for g in sched if not sundays or g["date"] < sundays[0]]
+    return "; ".join(_game_label(g) for g in early) or "none this week"
+
+
+def locked_games_at(week: int, games: list[dict], now: datetime) -> str:
+    """This week's games that have already kicked off at `now`."""
+    sched = nflverse.schedule(week, games)["games"]
+    started = [g for g in sched if _kickoff(g) <= now]
+    return "; ".join(f"{g['away']}@{g['home']}" for g in started) or "none yet"
 
 
 def generate(run: str, week: int | None = None, now: datetime | None = None, claude=run_claude) -> dict:
@@ -171,7 +223,7 @@ def generate(run: str, week: int | None = None, now: datetime | None = None, cla
     now = now or datetime.now(EASTERN)
     games = nflverse.games()
     week = week or nflverse.current_week(games, now.date())
-    prompt = build_prompt(run, week, now, tnf_kickoff_for(week, games))
+    prompt = build_prompt(run, week, now, early_games_for(week, games), locked_games_at(week, games, now))
 
     result = claude(prompt)
     out = result["structured_output"]

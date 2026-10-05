@@ -27,6 +27,14 @@ on run argv
 end run
 """
 
+# A notification on the Mac itself. It's a Standard Additions command run by osascript,
+# not an Apple Event to Messages, so it works when Messages can't send.
+NOTIFY_SCRIPT = """
+on run argv
+    display notification (item 1 of argv) with title "Booth"
+end run
+"""
+
 
 class DeliveryError(RuntimeError):
     pass
@@ -62,3 +70,15 @@ def send(text: str) -> str:
             raise DeliveryError(f"Messages refused to send: {proc.stderr.strip()[:300]}")
         return ch
     raise DeliveryError(f"Unknown BOOTH_DELIVERY channel '{ch}'.")
+
+
+def notify(text: str) -> None:
+    """Show a notification on the Mac: the fallback alert when a message can't be sent."""
+    if sys.platform != "darwin":
+        raise DeliveryError("Mac notifications only work on a Mac.")
+    try:
+        proc = subprocess.run(["osascript", "-", text[:250]], input=NOTIFY_SCRIPT, capture_output=True, text=True, timeout=30)
+    except subprocess.TimeoutExpired as exc:
+        raise DeliveryError("The notification didn't show within 30 seconds.") from exc
+    if proc.returncode != 0:
+        raise DeliveryError(f"Notification failed: {proc.stderr.strip()[:300]}")

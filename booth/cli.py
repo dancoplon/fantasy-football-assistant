@@ -128,19 +128,27 @@ def cmd_data_check(args: argparse.Namespace) -> int:
 
 
 def cmd_report(args: argparse.Namespace) -> int:
+    from booth.deliver import DeliveryError
+    from booth.jobs import LockBusy, lock, record_manual_delivery
     from booth.report import ReportError, generate
 
     try:
-        result = generate(args.run, week=args.week)
-    except ReportError as exc:
+        with lock():  # never alongside a scheduled run
+            result = generate(args.run, week=args.week)
+            print(result["message"])
+            print(f"\n[saved {result['path'].relative_to(ROOT)}; cost ${result['snapshot'].get('cost_usd') or 0:.2f}]")
+            if args.send:
+                from booth.deliver import send
+
+                print(f"[sent via {send(result['message'])}]")
+                if record_manual_delivery(args.run, result["snapshot"]["week"]):
+                    print("[marked delivered: the schedule won't send this report again]")
+    except LockBusy:
+        print("error: a scheduled Booth run is in progress; try again in a few minutes.", file=sys.stderr)
+        return 1
+    except (ReportError, DeliveryError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
-    print(result["message"])
-    print(f"\n[saved {result['path'].relative_to(ROOT)}; cost ${result['snapshot'].get('cost_usd') or 0:.2f}]")
-    if args.send:
-        from booth.deliver import send
-
-        print(f"[sent via {send(result['message'])}]")
     return 0
 
 
