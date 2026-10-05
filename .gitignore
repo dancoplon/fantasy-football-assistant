@@ -1,0 +1,37 @@
+# --- Secrets: never commit ---------------------------------------------------
+# Yahoo Client ID/Secret, iMessage recipient, etc. live in .env (see .env.example)
+.env
+.env.*
+!.env.example
+
+# OAuth token storage. Booth writes tokens to secrets/ (YAHOO_TOKEN_FILE);
+# the other patterns catch the yahoo_oauth library's default file names.
+secrets/
+oauth2.json
+*token*.json
+*.pem
+*.key
+
+# --- Local runtime data --------------------------------------------------------
+# Weekly state snapshots and run logs stay on the Mac running Booth.
+state/
+logs/
+reports/
+
+# --- Python ----------------------------------------------------------------------
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+
+# --- OS / editor ------------------------------------------------------------------
+.DS_Store
+.idea/
+.vscode/
