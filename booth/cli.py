@@ -7,7 +7,7 @@
   uv run booth report thu --send   ...and deliver it (iMessage)
   uv run booth run due      what launchd runs: build and send whichever report is due
   uv run booth send-test    send a short test iMessage
-  uv run booth schedule install|uninstall|status|wake
+  uv run booth schedule install|uninstall|status|wake|test-send
 """
 
 from __future__ import annotations
@@ -168,7 +168,8 @@ def cmd_schedule(args: argparse.Namespace) -> int:
     from booth import schedule
 
     action = {"install": schedule.install, "uninstall": schedule.uninstall,
-              "status": schedule.status, "wake": schedule.install_wake}[args.action]
+              "status": schedule.status, "wake": schedule.install_wake,
+              "test-send": schedule.test_send}[args.action]
     try:
         print(action())
     except (RuntimeError, FileNotFoundError) as exc:
@@ -200,7 +201,7 @@ def main(argv: list[str] | None = None) -> int:
     p_run.set_defaults(func=cmd_run)
     sub.add_parser("send-test", help="send a test message").set_defaults(func=cmd_send_test)
     p_sch = sub.add_parser("schedule", help="manage the launchd job (macOS)")
-    p_sch.add_argument("action", choices=["install", "uninstall", "status", "wake"])
+    p_sch.add_argument("action", choices=["install", "uninstall", "status", "wake", "test-send"])
     p_sch.set_defaults(func=cmd_schedule)
     args = parser.parse_args(argv)
     try:

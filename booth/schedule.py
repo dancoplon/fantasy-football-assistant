@@ -114,6 +114,51 @@ def status() -> str:
     return "\n".join(["Installed.", *keep, "Recent log:", *tail])
 
 
+def test_send(wait_seconds: int = 180) -> str:
+    """Send the test iMessage from a one-shot LaunchAgent, the same context scheduled reports use.
+
+    The macOS "control Messages" permission is granted per app, so this makes the
+    prompt name Booth's runner instead of whatever app you happen to be typing in.
+    """
+    import time
+
+    label = "com.booth.sendtest"
+    plist = PLIST.parent / f"{label}.plist"
+    log = ROOT / "logs" / "sendtest.log"
+    (ROOT / "logs").mkdir(exist_ok=True)
+    log.unlink(missing_ok=True)
+    base = plist_dict()
+    job = {
+        "Label": label,
+        "ProgramArguments": base["ProgramArguments"][:-2] + ["send-test"],
+        "WorkingDirectory": base["WorkingDirectory"],
+        "EnvironmentVariables": base["EnvironmentVariables"],
+        "RunAtLoad": True,
+        "StandardOutPath": str(log),
+        "StandardErrorPath": str(log),
+    }
+    plist.parent.mkdir(parents=True, exist_ok=True)
+    with plist.open("wb") as f:
+        plistlib.dump(job, f)
+    domain = f"gui/{os.getuid()}"
+    _launchctl("bootout", f"{domain}/{label}")
+    res = _launchctl("bootstrap", domain, str(plist))
+    if res.returncode != 0:
+        plist.unlink(missing_ok=True)
+        raise RuntimeError(f"launchctl bootstrap failed: {res.stderr.strip()}")
+    try:
+        deadline = time.time() + wait_seconds
+        while time.time() < deadline:
+            text = log.read_text() if log.exists() else ""
+            if "sent via" in text or "error" in text.lower():
+                return text.strip()
+            time.sleep(2)
+        return "No result yet. If a 'control Messages' prompt is showing, click OK and run this again."
+    finally:
+        _launchctl("bootout", f"{domain}/{label}")
+        plist.unlink(missing_ok=True)
+
+
 def install_wake() -> str:
     """Ask macOS for a 7:55 AM wake on Tue/Sat/Sun. Shows the standard admin password dialog."""
     script = f'do shell script "{PMSET_WAKE}" with administrator privileges'

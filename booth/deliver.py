@@ -49,9 +49,15 @@ def send(text: str) -> str:
             raise DeliveryError("IMESSAGE_RECIPIENT is not set in .env.")
         if sys.platform != "darwin":
             raise DeliveryError("iMessage delivery only works on a Mac.")
-        proc = subprocess.run(
-            ["osascript", "-", text, recipient], input=SEND_SCRIPT, capture_output=True, text=True, timeout=60
-        )
+        try:
+            proc = subprocess.run(
+                ["osascript", "-", text, recipient], input=SEND_SCRIPT, capture_output=True, text=True, timeout=120
+            )
+        except subprocess.TimeoutExpired as exc:
+            raise DeliveryError(
+                "Messages didn't respond within 2 minutes. macOS is probably waiting for someone to "
+                "click OK on a 'control Messages' permission prompt."
+            ) from exc
         if proc.returncode != 0:
             raise DeliveryError(f"Messages refused to send: {proc.stderr.strip()[:300]}")
         return ch

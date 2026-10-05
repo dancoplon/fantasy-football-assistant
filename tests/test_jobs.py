@@ -139,3 +139,22 @@ def test_sunday_catch_up_after_london_kickoff_is_late(env, games):
     sent = []
     jobs.run_due(at(2026, 10, 18, 10, 0), games, _gen([]), sent.append)
     assert sent[0].startswith("LATE:") and "HOU@JAX" in sent[0] and "SEA@DEN" not in sent[0]
+
+
+def test_test_send_uses_same_runner_as_schedule(monkeypatch, tmp_path):
+    monkeypatch.setattr(schedule, "_bin", lambda name: f"/Users/x/.local/bin/{name}")
+    monkeypatch.setattr(schedule, "PLIST", tmp_path / "com.booth.scheduler.plist")
+    monkeypatch.setattr(schedule, "ROOT", tmp_path)
+    calls = []
+
+    def fake_launchctl(*args):
+        calls.append(args)
+        if args[0] == "bootstrap":
+            plist = plistlib.loads(Path(args[2]).read_bytes())
+            assert plist["ProgramArguments"][-2:] == ["booth", "send-test"]
+            (tmp_path / "logs" / "sendtest.log").write_text("sent via imessage\n")
+        return type("R", (), {"returncode": 0, "stderr": ""})()
+
+    monkeypatch.setattr(schedule, "_launchctl", fake_launchctl)
+    assert schedule.test_send(wait_seconds=5) == "sent via imessage"
+    assert calls[-1][0] == "bootout" and not (tmp_path / "com.booth.sendtest.plist").exists()

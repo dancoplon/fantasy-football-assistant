@@ -33,3 +33,13 @@ def test_imessage_failure_raises(monkeypatch):
     with mock.patch.object(deliver.subprocess, "run", return_value=mock.Mock(returncode=1, stderr="not authorized")):
         with pytest.raises(deliver.DeliveryError, match="not authorized"):
             deliver.send("x")
+
+
+def test_imessage_timeout_becomes_delivery_error(monkeypatch):
+    monkeypatch.setattr(deliver, "load_dotenv", lambda *a, **k: None)
+    monkeypatch.setenv("IMESSAGE_RECIPIENT", "+15555550123")
+    monkeypatch.delenv("BOOTH_DELIVERY", raising=False)
+    monkeypatch.setattr(deliver.sys, "platform", "darwin")
+    with mock.patch.object(deliver.subprocess, "run", side_effect=deliver.subprocess.TimeoutExpired("osascript", 120)):
+        with pytest.raises(deliver.DeliveryError, match="permission prompt"):
+            deliver.send("x")
