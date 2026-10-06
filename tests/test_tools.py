@@ -1,3 +1,4 @@
+import json
 import asyncio
 from unittest import mock
 
@@ -202,3 +203,126 @@ def test_free_agent_tool_falls_back_to_saved_list(saved_list, monkeypatch):
     monkeypatch.setattr(saved_list, "FREE_AGENTS_MAX_AGE", saved_list.timedelta(0))
     out = mcp_server.get_free_agents()
     assert "provisioned" in out["error"] and "saved list" in out["error"]
+
+
+def _write(path, data):
+    path.write_text(json.dumps(data))
+    return path
+
+
+def test_local_roster_copy_wins_and_goes_stale(monkeypatch, tmp_path):
+    from datetime import datetime, timezone
+    from booth import manual
+    seed = json.loads(manual.MANUAL_ROSTER.read_text())
+    local = dict(seed, as_of="2026-10-07T21:00:00-04:00", players=seed["players"][:24] + [
+        {"name": "Aaron Rodgers", "position": "QB", "nfl_team": "PIT", "bye_week": 9, "status": "", "slot": "BN"}])
+    monkeypatch.setattr(manual, "MANUAL_ROSTER_LOCAL", _write(tmp_path / "local.json", local))
+    r = manual.manual_roster(now=datetime(2026, 10, 8, 16, tzinfo=timezone.utc))
+    assert r["source"] == "manual" and "Aaron Rodgers" in {p["name"] for p in r["players"]} and "warning" not in r
+    assert "Dan may have made moves" in manual.manual_roster(now=datetime(2026, 10, 16, tzinfo=timezone.utc))["warning"]
+
+
+def test_matchup_copy_only_for_its_week(monkeypatch):
+    from datetime import datetime, timezone
+    from booth import manual
+    monkeypatch.setattr(manual, "MANUAL_MATCHUP", manual.CONFIG / "manual_matchup.example.json")
+    thu = datetime(2026, 10, 8, 16, tzinfo=timezone.utc)
+    m = manual.manual_matchup(5, now=thu)
+    assert m["source"] == "manual" and m["opponent"]["team_name"] == "Example Opponent" and "_note" not in m
+    assert manual.manual_matchup(6, now=thu) is None
+    assert manual.manual_matchup(None, now=thu)["week"] == 5
+    assert manual.manual_matchup(None, now=datetime(2026, 10, 17, tzinfo=timezone.utc)) is None
+
+
+def test_matchup_tool_falls_back_to_copy(monkeypatch):
+    from booth import manual
+
+    def boom():
+        raise YahooAccessError("401 not provisioned")
+    monkeypatch.setattr(mcp_server, "client", boom)
+    monkeypatch.setattr(manual, "MANUAL_MATCHUP", manual.CONFIG / "manual_matchup.example.json")
+    monkeypatch.setattr(manual, "MATCHUP_MAX_AGE", manual.timedelta(days=36500))
+    monkeypatch.setattr(mcp_server.nflverse, "games", lambda: [])
+    monkeypatch.setattr(mcp_server.nflverse, "current_week", lambda games: 5)
+    out = mcp_server.get_matchup()
+    assert out["source"] == "manual" and out["week"] == 5 and "provisioned" in out["yahoo_error"]
+    out = mcp_server.get_matchup(week=6)
+    assert "provisioned" in out["error"] and "matchup page" in out["error"]
+
+
+def test_file_checks_catch_bad_copies():
+    from booth import manual
+    assert manual.check_roster({"players": [{"name": "A", "position": "QB", "nfl_team": "X"}]}) == [
+        '"as_of" is missing or not an ISO date/time',
+        "only 1 players: looks like part of the roster (a full one is about 25 plus IR)"]
+    dupes = [{"name": "A", "position": "XX", "nfl_team": "X"}] * 2 + [{"name": f"P{i}", "position": "RB"} for i in range(20)]
+    probs = manual.check_roster({"as_of": "2026-10-07", "players": dupes})
+    assert any("position \"XX\"" in p for p in probs) and any("listed twice" in p for p in probs)
+    assert any('missing "nfl_team"' in p for p in probs)
+    assert manual.check_matchup({"as_of": "2026-10-08", "week": 19, "opponent": {}}) == [
+        '"week" must be a whole number from 1 to 18', '"opponent.team_name" is missing']
+    assert manual.check_matchup({"as_of": "x", "week": 5, "me": {"projected_points": "112"},
+                                 "opponent": {"team_name": "T", "starters": [{"name": "Q"}]}}) == [
+        '"as_of" is missing or not an ISO date/time', '"me.projected_points" must be a number',
+        'opponent starter 1 (Q): missing "slot"']
+
+
+def test_manual_status_summarizes_each_copy(monkeypatch, tmp_path):
+    from datetime import datetime, timezone
+    from booth import manual
+    monkeypatch.setattr(manual, "MANUAL_FREE_AGENTS", manual.CONFIG / "manual_free_agents.example.json")
+    monkeypatch.setattr(manual, "MANUAL_MATCHUP", manual.CONFIG / "manual_matchup.example.json")
+    text = manual.status(now=datetime(2026, 10, 8, 16, tzinfo=timezone.utc), current_week=5)
+    assert "Roster (manual_roster.json): 25 players" in text
+    assert "Available players: 6 players" in text and "In use." in text and "Mon Oct 12 5:39 PM" in text
+    assert "Matchup: week 5 vs Example Opponent" in text and "Not used" not in text and "problem:" not in text
+    text = manual.status(now=datetime(2026, 10, 14, 16, tzinfo=timezone.utc), current_week=6)
+    assert "STALE" in text and "EXPIRED" in text and "Not used: this is week 6." in text
+    monkeypatch.setattr(manual, "MANUAL_MATCHUP", _write(tmp_path / "m.json", {"week": 5}))
+    assert "problem:" in manual.status(current_week=5)
+
+
+def test_unreadable_local_roster_falls_back_to_the_seed(monkeypatch, tmp_path):
+    from booth import manual
+    bad = tmp_path / "local.json"
+    bad.write_text('{"as_of": "2026-10-07", "players": [')  # cut off mid-write
+    monkeypatch.setattr(manual, "MANUAL_ROSTER_LOCAL", bad)
+    r = manual.manual_roster()
+    assert r["source"] == "manual" and len(r["players"]) == 25 and "couldn't be read" in r["warning"]
+
+    def boom():
+        raise YahooAccessError("401 not provisioned")
+    monkeypatch.setattr(mcp_server, "client", boom)
+    assert "couldn't be read" in mcp_server.get_my_roster()["warning"]
+
+
+def test_local_roster_without_a_date_is_still_used(monkeypatch, tmp_path):
+    from booth import manual
+    seed = json.loads(manual.MANUAL_ROSTER.read_text())
+    for as_of in (None, "Oct 7"):
+        local = {k: v for k, v in seed.items() if k != "as_of"} | ({"as_of": as_of} if as_of else {})
+        local["players"] = seed["players"][:24] + [{"name": "Aaron Rodgers", "position": "QB", "nfl_team": "PIT"}]
+        monkeypatch.setattr(manual, "MANUAL_ROSTER_LOCAL", _write(tmp_path / "local.json", local))
+        r = manual.manual_roster()
+        assert "Aaron Rodgers" in {p["name"] for p in r["players"]} and "no readable as_of" in r["warning"]
+
+
+@pytest.mark.parametrize("content", ['{"week": 5, "as_of": ', '{"week": "five", "as_of": "2026-10-08"}', "[]"])
+def test_unreadable_matchup_or_list_counts_as_missing(monkeypatch, tmp_path, content):
+    from booth import manual
+    (tmp_path / "m.json").write_text(content)
+    monkeypatch.setattr(manual, "MANUAL_MATCHUP", tmp_path / "m.json")
+    monkeypatch.setattr(manual, "MANUAL_FREE_AGENTS", tmp_path / "m.json")
+    assert manual.manual_matchup(5) is None and manual.manual_matchup(None) is None
+    assert manual.manual_free_agents() is None
+
+
+@pytest.mark.parametrize("which", ["MANUAL_ROSTER_LOCAL", "MANUAL_MATCHUP", "MANUAL_FREE_AGENTS"])
+def test_manual_status_fails_on_a_broken_copy(monkeypatch, tmp_path, capsys, which):
+    from booth import cli, manual
+    (tmp_path / "x.json").write_text("{not json")
+    monkeypatch.setattr(manual, which, tmp_path / "x.json")
+    monkeypatch.setattr(mcp_server.nflverse, "games", lambda: [])
+    monkeypatch.setattr(mcp_server.nflverse, "current_week", lambda games: 5)
+    assert cli.main(["manual-status"]) == 1
+    assert "problem:" in capsys.readouterr().out

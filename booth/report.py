@@ -54,7 +54,15 @@ SLOTS = ["QB", "RB1", "RB2", "WR1", "WR2", "TE", "FLEX1", "FLEX2", "K", "DEF"]
 SNAPSHOT_SCHEMA = {
     "type": "object",
     "properties": {
-        "message": {"type": "string"},
+        "message_blocks": {
+            "type": "array",
+            "items": {"type": "string"},
+            "minItems": 1,
+            "description": "The message Dan reads, in blocks. Booth puts a blank line between blocks. "
+                           "One block per section or numbered item: a heading together with its first item, "
+                           "each numbered claim with its reasons and drop/IR line, the whole lineup, injuries "
+                           "to watch, weather, closing notes. No blank lines inside a block.",
+        },
         "lineup": {"type": "object", "properties": {s: _player for s in SLOTS}, "required": SLOTS},
         "bench_flags": {
             "type": "array",
@@ -87,7 +95,7 @@ SNAPSHOT_SCHEMA = {
         },
         "sources": {"type": "array", "items": {"type": "string"}},
     },
-    "required": ["message", "lineup", "bench_flags", "waiver_recs", "weather_flags", "sources"],
+    "required": ["message_blocks", "lineup", "bench_flags", "waiver_recs", "weather_flags", "sources"],
 }
 
 MCP_SERVER = "yahoo-fantasy"
@@ -221,9 +229,18 @@ def locked_games_at(week: int, games: list[dict], now: datetime) -> str:
 
 _NUMBERED = re.compile(r"^\d{1,2}[.)]\s")
 _BULLET = re.compile(r"^\s*[-•*]\s")
-_SLOT = re.compile(r"^(QB|RB|WR|TE|FLEX|W/R/T|SUPERFLEX|SFLEX|K|DEF|DST|D/ST|BN|IR)\d?\b", re.IGNORECASE)
+# A lineup line: a slot, then a player, a note in parentheses, or ":" ("QB Burrow @MIA 20",
+# "FLEX1 (after inactives):"). Case-sensitive, so "QB streamers for week 6:" is a heading.
+_SLOT = re.compile(r"^(QB|RB|WR|TE|FLEX|W/R/T|SUPERFLEX|SFLEX|K|DEF|DST|D/ST|BN|IR)\d?(\s+[A-Z(@]|\s*[(:])")
 # Plain lines that still belong to the numbered claim above them ("Drop: X", "IR: move Y").
-_CLAIM_CONTINUES = re.compile(r"^(drop|ir|move|free|bid|then)\b", re.IGNORECASE)
+_CLAIM_CONTINUES = re.compile(
+    r"^(drop|ir|move|free|bid|then|if (he|she|they)|otherwise|else|backups?|fallback|pivot|unless)\b", re.IGNORECASE)
+# Lines ending in ":" that open a part of the claim above them, not a new section.
+# ("IR moves first:" is left out on purpose: that reads as its own section.)
+_CLAIM_HEAD = re.compile(r"^(drop|free (the|a|up)|if|backups?|otherwise|else|fallback|pivot|unless)\b", re.IGNORECASE)
+
+# Kickoff-group headings inside a lineup ("4:25 PM ET:", "Sunday night:") still start a group.
+_TIME_HEAD = re.compile(r"^(\d{1,2}(:\d\d)?\s*(AM|PM)\b|(thu|fri|sat|sun|mon)\w*\b|(early|late|night)\b)", re.IGNORECASE)
 
 
 def _is_heading(line: str) -> bool:
@@ -231,20 +248,32 @@ def _is_heading(line: str) -> bool:
             and not _BULLET.match(line) and not _NUMBERED.match(line) and not _SLOT.match(line))
 
 
+def _next_top_line(lines: list[str], i: int) -> str:
+    """The next line after i that isn't a "-" item or indented, within the same block."""
+    for line in lines[i + 1:]:
+        if not line.strip():
+            return ""
+        if line[:1].isspace() or _BULLET.match(line):
+            continue
+        return line
+    return ""
+
+
 def space_sections(text: str) -> str:
     """Put a blank line between a report's sections so it isn't a wall of text on a phone.
 
-    A blank line goes before each top-level numbered item and each heading line ending
-    in ":" (unless a heading sits right above it), and after a "-" list that hangs off a
-    heading or numbered item when plain text follows. Lineup lines, notes under them,
-    indented lines, and a claim's drop/IR line stay together. Runs of blank lines
-    collapse to one. The model is asked for this spacing too; this makes it certain.
+    The fallback for a message that came back as one block (see message_text). A blank
+    line goes before each top-level numbered item and each heading line ending in ":"
+    (unless a heading sits right above it), and after a "-" list that hangs off a heading
+    or numbered item when plain text follows. Lineup lines and notes between them,
+    indented lines, and a claim's drop/IR/backup lines stay together. Runs of blank lines
+    collapse to one.
     """
+    lines = [ln.rstrip() for ln in text.replace("\r\n", "\n").replace("\r", "\n").split("\n")]
     out: list[str] = []
     anchor = ""  # the line the current "-" list hangs off, within this block
     tail = False  # the previous line was a "-" item or a claim's drop/IR line
-    for line in text.replace("\r\n", "\n").replace("\r", "\n").split("\n"):
-        line = line.rstrip()
+    for i, line in enumerate(lines):
         if not line:
             if out and out[-1]:
                 out.append("")
@@ -254,9 +283,18 @@ def space_sections(text: str) -> str:
         top = not line[:1].isspace()
         bullet = bool(_BULLET.match(line))
         continues_claim = False
+        lineup_note = False
         if prev and top and not bullet:
-            if _NUMBERED.match(line) or _is_heading(line):
-                gap = not _is_heading(prev)
+            if _NUMBERED.match(anchor) and _is_heading(line) and _CLAIM_HEAD.match(line):
+                continues_claim, gap = True, False  # "Drop one of:", "If you lose him, backups:"
+            elif (_SLOT.match(prev) and not _SLOT.match(line) and not (_is_heading(line) and _TIME_HEAD.match(line))
+                  and _SLOT.match(_next_top_line(lines, i))):
+                lineup_note, gap = True, False  # a note between two lineup lines
+            elif _NUMBERED.match(line) or _is_heading(line):
+                numbered_heading = _NUMBERED.match(prev) and prev.endswith(":") and not _NUMBERED.match(line)
+                gap = not (_is_heading(prev) or numbered_heading)
+            elif _SLOT.match(line):
+                gap = False  # a lineup line never starts a section on its own
             elif tail and _is_heading(anchor):
                 gap = True
             elif tail and _NUMBERED.match(anchor):
@@ -266,11 +304,30 @@ def space_sections(text: str) -> str:
                 gap = False
             if gap:
                 out.append("")
-        if top and not bullet and not continues_claim:
+        if top and not bullet and not continues_claim and not lineup_note:
             anchor = line
         tail = bullet or continues_claim or (tail and not top)
         out.append(line)
     return "\n".join(out).strip("\n")
+
+
+def _clean_block(block: str) -> str:
+    lines = [ln.rstrip() for ln in block.replace("\r\n", "\n").replace("\r", "\n").split("\n")]
+    out: list[str] = []
+    for line in lines:
+        if line or (out and out[-1]):
+            out.append(line)
+    return "\n".join(out).strip("\n")
+
+
+def message_text(out: dict) -> str:
+    """The text Dan reads. Claude writes it as blocks (sections, claims, the lineup), joined
+    here with blank lines. space_sections spaces whatever a block still crams together, so
+    a message that came back as one block (or as a legacy "message") isn't a wall either."""
+    blocks = [b for b in (_clean_block(b) for b in out.get("message_blocks") or []) if b]
+    if not blocks:
+        blocks = [out.get("message") or ""]
+    return "\n\n".join(space_sections(b) for b in blocks).strip("\n")
 
 
 def generate(run: str, week: int | None = None, now: datetime | None = None, claude=run_claude) -> dict:
@@ -291,12 +348,12 @@ def generate(run: str, week: int | None = None, now: datetime | None = None, cla
         "run": run,
         "generated_at": now.astimezone(ZoneInfo("UTC")).strftime("%Y-%m-%dT%H:%M:%SZ"),
         **{k: out.get(k) for k in ("lineup", "bench_flags", "waiver_recs", "weather_flags", "sources")},
-        "message": out["message"],
+        "message": message_text(out),
         "cost_usd": result.get("total_cost_usd"),
     }
 
     changes: list[str] = []
-    message = space_sections(out["message"])
+    message = snapshot["message"]
     if run in DIFF_AGAINST:
         prev = prior_snapshot(nflverse.SEASON, week, run)
         changes = diff_snapshots(prev, snapshot)

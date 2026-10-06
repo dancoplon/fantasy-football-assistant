@@ -373,6 +373,7 @@ def run_due(now: datetime | None = None, games: list[dict] | None = None, genera
     label = RUN_LABELS[run]
     jobs: dict = {}
     job: dict = {}
+    via = None
     stage = "setup"
     try:
         with _Lock():
@@ -436,7 +437,7 @@ def run_due(now: datetime | None = None, games: list[dict] | None = None, genera
             if os.getenv("BOOTH_DRY_RUN") == "1":
                 message = f"[DRY RUN] {message}"
             stage = "send"
-            send_fn(message)
+            via = send_fn(message)
             job["delivered_at"] = sent_at.isoformat()
             _save_bookkeeping(season, week, jobs)
     except LockBusy:
@@ -445,6 +446,8 @@ def run_due(now: datetime | None = None, games: list[dict] | None = None, genera
     except Exception as exc:  # anything else: alert instead of failing silently
         return _fail(run, week, label, exc, jobs, job, send_fn, notify_fn, season, stage)
     outcome = f"delivered {run} week {week}"
+    if isinstance(via, str) and via.startswith("imessage (Telegram failed"):
+        outcome += f" by {via}"  # so `booth schedule status` shows why it came by text
     _log(outcome)
     return outcome
 

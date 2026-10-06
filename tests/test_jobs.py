@@ -552,3 +552,11 @@ def test_no_rebuild_right_before_a_kickoff(env, games):
     jobs.run_due(at(2026, 10, 18, 8, 0), games, _gen(calls), send, notify_fn=lambda t: None)
     jobs.run_due(at(2026, 10, 18, 20, 0), games, _gen(calls), send)  # 20 minutes before the night game
     assert calls == [("sun", 6)] and sent[-1].endswith("report sun 6")
+
+
+def test_outcome_says_when_telegram_fell_back_to_imessage(env, games):
+    calls = []
+    out = jobs.run_due(at(2026, 10, 13, 8, 5), games, _gen(calls),
+                       lambda text: "imessage (Telegram failed: Telegram unreachable: slow)")
+    assert out == "delivered tue week 6 by imessage (Telegram failed: Telegram unreachable: slow)"
+    assert jobs.run_due(at(2026, 10, 13, 8, 35), games, _gen(calls), lambda t: "telegram") == "tue week 6 already delivered"

@@ -1,5 +1,5 @@
 {
-  "_note": "Fallback used only when the Yahoo API is unreachable or not yet provisioned. Seeded from the project brief; update by hand if the roster changes before Yahoo access works.",
+  "_note": "Seed only; do not edit (this repo is public). Used when the Yahoo API is unreachable and there is no config/manual_roster.local.json (gitignored), which holds Dan's current roster and is read first.",
   "as_of": "2026-10-05",
   "team_name": "Mayor of Titty City",
   "faab_remaining": 100,

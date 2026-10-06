@@ -141,13 +141,17 @@ def _tail(path: Path, n: int) -> list[str]:
     return [f"  {ln}" for ln in lines] or ["  (none yet)"]
 
 
-def test_send(wait_seconds: int = 180) -> str:
-    """Send the test iMessage from a one-shot LaunchAgent, the same context scheduled reports use.
+def test_send(via: str | None = None, wait_seconds: int = 180) -> str:
+    """Send a test message (by the channel in use, or `via`) from a one-shot LaunchAgent, the
+    same context scheduled reports use.
 
-    The macOS "control Messages" permission is granted per app, so this makes the
-    prompt name Booth's runner instead of whatever app you happen to be typing in.
+    For iMessage this matters: the macOS "control Messages" permission is granted per app,
+    so this makes the prompt name Booth's runner instead of whatever app you happen to be
+    typing in. `via="imessage"` checks the iMessage backup while Telegram is in use.
     """
     import time
+
+    from booth.deliver import channel
 
     label = "com.booth.sendtest"
     plist = PLIST.parent / f"{label}.plist"
@@ -157,7 +161,7 @@ def test_send(wait_seconds: int = 180) -> str:
     base = plist_dict()
     job = {
         "Label": label,
-        "ProgramArguments": base["ProgramArguments"][:-2] + ["send-test"],
+        "ProgramArguments": base["ProgramArguments"][:-2] + ["send-test"] + (["--via", via] if via else []),
         "WorkingDirectory": base["WorkingDirectory"],
         "EnvironmentVariables": base["EnvironmentVariables"],
         "RunAtLoad": True,
@@ -180,7 +184,9 @@ def test_send(wait_seconds: int = 180) -> str:
             if "sent via" in text or "error" in text.lower():
                 return text.strip()
             time.sleep(2)
-        return "No result yet. If a 'control Messages' prompt is showing, click OK and run this again."
+        return ("No result yet. If a 'control Messages' prompt is showing, click OK and run this again."
+                if via == "imessage" or (not via and channel() == "imessage")
+                else "No result yet. Check logs/sendtest.log, or run `uv run booth send-test` to see the error.")
     finally:
         _launchctl("bootout", f"{domain}/{label}")
         plist.unlink(missing_ok=True)
