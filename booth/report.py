@@ -167,7 +167,7 @@ def parse_stream(stdout: str, returncode: int = 0, stderr: str = "") -> dict:
     return result
 
 
-def run_claude(prompt: str, timeout: int = 900) -> dict:
+def run_claude(prompt: str, timeout: int = 900, schema: dict | None = None) -> dict:
     """Run `claude -p` with Booth's MCP server and return its result (with structured_output)."""
     cmd = [
         claude_bin(),
@@ -175,7 +175,7 @@ def run_claude(prompt: str, timeout: int = 900) -> dict:
         prompt,
         "--output-format", "stream-json",
         "--verbose",
-        "--json-schema", json.dumps(SNAPSHOT_SCHEMA),
+        "--json-schema", json.dumps(schema or SNAPSHOT_SCHEMA),
         "--mcp-config", mcp_config(),
         "--strict-mcp-config",
         "--permission-mode", "dontAsk",

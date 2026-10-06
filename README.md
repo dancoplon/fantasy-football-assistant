@@ -10,6 +10,7 @@ Reads my own team's data from the Yahoo Fantasy Sports API on a fixed weekly sch
 - **Thursday** — projected starting lineup for the week's matchup
 - **Saturday** — updated lineup, injury and weather flags
 - **Sunday** — final start/sit check before games lock
+- **Game days** — a short alert when a recommended starter is ruled inactive (only then)
 
 Reports combine Yahoo data with public sources (injury news, weather, player usage trends). Every suggestion includes a one- or two-line explanation.
 
@@ -82,6 +83,7 @@ Set `BOOTH_MODEL` to pick a model; the default is Claude Code's.
 - Reports are built with Booth's MCP server started by the same Python (no PATH dependence). A run where the server didn't connect, or where Claude used none of its tools, counts as a failure, not a report.
 - If a report can't be built, Booth sends one alert and retries every 30 minutes, up to 6 tries; if it gives up, it says so. A report that was built but couldn't be sent keeps retrying the send. When Messages itself is failing, the alert falls back to a notification on the Mac.
 - Delivery is iMessage to `IMESSAGE_RECIPIENT` in `.env` via `booth/deliver.py`, a single `send()` function so the channel can be swapped later. `uv run booth schedule test-send` checks it from the same background context the schedule uses (that's where macOS asks for the "control Messages" permission).
+- Inactives alert (`booth/inactives.py`): teams name inactive players 90 minutes before kickoff. When a run falls 80 to 5 minutes before a kickoff, Booth looks at that game's starters in the week's latest lineup report. If any carries an injury designation (in that report or the official injury report), one Claude run checks the inactives and picks a bench swap. Dan gets a message only if a starter is out, or if the last check before kickoff still couldn't confirm one. Up to 2 checks per kickoff; nothing is sent after kickoff; healthy starters aren't checked; with the Mac asleep there's no check.
 - `uv run booth report <run> --send` sends a report by hand; if it's the one currently due, the schedule won't send it again.
 - `BOOTH_DRY_RUN=1` prefixes every scheduled message with `[DRY RUN]`.
 - `uv run booth schedule wake` (optional) asks for an admin password once and sets a wake one minute after the 8 AM reports on Tue/Sat/Sun. It only helps with the lid open.
