@@ -408,3 +408,135 @@ def test_a_written_swap_is_sent_even_if_names_dont_line_up(env, games):
     said = {"players": [{"name": "Jim Cook", "slot": "RB", "status": "inactive"}], "message": INACTIVE["message"]}
     assert run(at(15, 10), games, Checker(said), sent).endswith("sent: James Cook inactive")
     assert "Bench James Cook (INACTIVE)" in sent[0]
+
+
+MIXED = {"players": [{"name": "James Cook", "slot": "RB1", "status": "inactive"},
+                     {"name": "Brock Bowers", "slot": "TE", "status": "unknown"}],
+         "message": INACTIVE["message"]}
+BOWERS_ACTIVE = {"players": [{"name": "Brock Bowers", "slot": "TE", "status": "active"}], "message": ""}
+BOWERS_UNKNOWN = {"players": [{"name": "Brock Bowers", "slot": "TE", "status": "unknown"}], "message": ""}
+
+
+def send_failing_first(sent):
+    attempts = []
+
+    def send(text):
+        attempts.append(text)
+        if len(attempts) == 1:
+            raise RuntimeError("Messages didn't answer")
+        sent.append(text)
+
+    return send
+
+
+def test_failed_send_on_a_two_run_phase_still_rechecks(env, games):
+    """Runs at 3:25 and 3:55 only: the 3:55 resend takes the recheck's run, so it rechecks too."""
+    save_lineup(TWO_Q)
+    check, sent = Checker(MIXED, BOWERS_ACTIVE), []
+    send = send_failing_first(sent)
+    assert inactives.run_inactives(at(15, 25), games, check, send, lambda t: None).startswith("failed")
+    out = inactives.run_inactives(at(15, 55), games, check, send, lambda t: None)
+    assert out == "inactives Sun 4:25 PM: sent: follow-up"
+    assert [p["name"] for p in check.calls[1]["players"]] == ["Brock Bowers"]
+    assert check.calls[1]["now"] == at(15, 55)
+    assert "Bench James Cook (INACTIVE)" in sent[0]
+    assert sent[1].endswith("Now confirmed active: Brock Bowers (Questionable). No change needed.")
+    assert job()["done"]
+
+
+def test_failed_send_recheck_still_unknown_says_so(env, games):
+    save_lineup(TWO_Q)
+    check, sent = Checker(MIXED, BOWERS_UNKNOWN), []
+    send = send_failing_first(sent)
+    inactives.run_inactives(at(15, 25), games, check, send, lambda t: None)
+    inactives.run_inactives(at(15, 55), games, check, send, lambda t: None)
+    assert len(sent) == 2 and "Couldn't confirm before the 4:25 PM ET kickoff: Brock Bowers" in sent[1]
+
+
+def test_failed_send_with_a_later_run_left_waits_for_it(env, games):
+    """Runs at 3:10, 3:40, 4:10: the 3:40 resend leaves the recheck to 4:10."""
+    save_lineup(TWO_Q)
+    check, sent = Checker(MIXED, BOWERS_ACTIVE), []
+    send = send_failing_first(sent)
+    inactives.run_inactives(at(15, 10), games, check, send, lambda t: None)
+    assert inactives.run_inactives(at(15, 40), games, check, send, lambda t: None).endswith(
+        "sent: James Cook inactive; rest pending")
+    assert len(check.calls) == 1
+    assert inactives.run_inactives(at(16, 10), games, check, send, lambda t: None).endswith("sent: follow-up")
+    assert check.calls[1]["now"] == at(16, 10) and len(sent) == 2
+
+
+def test_last_chance_resend_failure_drops_the_promise(env, games):
+    save_lineup(TWO_Q)
+    notified = []
+
+    def broken_send(text):
+        raise RuntimeError("no network")
+
+    check = Checker(MIXED)
+    inactives.run_inactives(at(15, 25), games, check, broken_send, notified.append)
+    assert notified == []  # 3:55 can still send it
+    inactives.run_inactives(at(15, 55), games, check, broken_send, notified.append)
+    assert len(notified) == 1 and "Bench James Cook (INACTIVE)" in notified[0]
+    assert inactives.PROMISE not in notified[0] and inactives.NO_RECHECK in notified[0]
+
+
+def test_mismatched_swap_echo_keeps_the_other_starter_pending(env, games):
+    save_lineup(TWO_Q)
+    first = {"players": [{"name": "J. Cook", "slot": "RB", "status": "inactive"},
+                         {"name": "Brock Bowers", "slot": "TE", "status": "unknown"}],
+             "message": INACTIVE["message"]}
+    check, sent = Checker(first, {**BOWERS_ACTIVE, "players": [
+        {"name": "Brock Bowers", "slot": "TE", "status": "inactive"}], "message": "Bench Brock Bowers."}), []
+    assert run(at(15, 10), games, check, sent) == "inactives Sun 4:25 PM: sent: James Cook inactive; rest pending"
+    assert sent[0].endswith("Not announced yet: Brock Bowers (Questionable). Booth will check again before kickoff.")
+    assert run(at(15, 40), games, check, sent) == "inactives Sun 4:25 PM: sent: Brock Bowers inactive"
+    assert [p["name"] for p in check.calls[1]["players"]] == ["Brock Bowers"]
+
+
+def test_a_note_with_everyone_unknown_is_not_an_alert(env, games):
+    save_lineup()
+    check, sent = Checker({**UNKNOWN, "message": "Bills inactives aren't out yet; no change for now."}, ACTIVE), []
+    assert run(at(15, 10), games, check, sent).endswith("not announced yet, will check again")
+    assert run(at(15, 40), games, check, sent).endswith("all active") and sent == []
+
+
+def test_a_note_on_the_last_check_still_warns(env, games):
+    save_lineup()
+    note = {**UNKNOWN, "message": "Bills inactives aren't out yet."}
+    check, sent = Checker(UNKNOWN, note), []
+    run(at(15, 10), games, check, sent)
+    assert run(at(15, 40), games, check, sent).endswith("sent: couldn't confirm James Cook")
+    assert sent == ["Booth: inactives alert, week 6\n\nCouldn't confirm before the 4:25 PM ET kickoff: "
+                    "James Cook (Questionable). Check the inactives yourself."]
+
+
+def test_failed_check_after_kickoff_sends_nothing(env, games):
+    save_lineup()
+    sent, notified = [], []
+    out = run(at(16, 18), games, Checker(RuntimeError("claude timed out")), sent, notified, clock=lambda: at(16, 28))
+    assert out.startswith("failed inactives Sun 4:25 PM")
+    assert sent == [] and notified == []
+    assert job()["done"] and job()["result"] == "kicked off before the check finished"
+
+
+@pytest.mark.parametrize("order", [1, -1])
+def test_bench_swap_in_the_same_slot_doesnt_count_as_the_starter(env, games, order):
+    save_lineup(TWO_Q)
+    check, sent = Checker(MIXED, {"players": [{"name": "Brock Bowers", "slot": "TE", "status": "inactive"},
+                                              {"name": "Theo Johnson", "slot": "TE", "status": "active"}][::order],
+                                  "message": "Bench Brock Bowers (INACTIVE). Start Theo Johnson."}), []
+    run(at(15, 10), games, check, sent)
+    assert run(at(15, 40), games, check, sent) == "inactives Sun 4:25 PM: sent: Brock Bowers inactive"
+    assert "Now confirmed active" not in sent[1]
+
+
+@pytest.mark.parametrize("order", [1, -1])
+def test_loose_echo_with_a_replacement_in_its_slot(env, games, order):
+    save_lineup()
+    said = [{"name": "J. Cook", "slot": "RB1", "status": "inactive"},
+            {"name": "Ray Davis", "slot": "RB1", "status": "active"}][::order]
+    sent = []
+    assert run(at(15, 10), games, Checker({"players": said, "message": INACTIVE["message"]}), sent).endswith(
+        "sent: James Cook inactive")
+    assert "Now confirmed active" not in sent[0]

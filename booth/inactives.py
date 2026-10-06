@@ -44,8 +44,10 @@ RUN_INTERVAL = timedelta(minutes=30)  # how often launchd runs `booth run due`
 MAX_CHECKS = 2  # Claude runs per kickoff: one retry if the lists weren't out yet or the run failed
 LINEUP_SOURCES = ("sun", "sat", "thu", "tue")  # newest lineup recommendation first
 HEALTHY = {"", "healthy", "active", "none", "probable", "p", "ok", "-", "n/a", "full"}
-# Yahoo/other spellings -> nflverse team codes
 NL = "\n\n"
+PROMISE = "Booth will check again before kickoff."
+NO_RECHECK = "Booth couldn't check again, so check the inactives yourself."
+# Yahoo/other spellings -> nflverse team codes
 TEAM_ALIASES = {"LAR": "LA", "STL": "LA", "JAC": "JAX", "WSH": "WAS", "GNB": "GB", "KAN": "KC", "NOR": "NO",
                 "NWE": "NE", "SFO": "SF", "TAM": "TB", "LVR": "LV", "OAK": "LV", "SD": "LAC", "SDG": "LAC"}
 
@@ -160,16 +162,25 @@ def check(week: int, now: datetime, kickoff: datetime, players: list[dict], game
 
 
 def _verdicts(players: list[dict], said: list[dict]) -> dict[str, str | None]:
-    """Each starter's status as Claude reported it: matched by name, then slot, then a looser
-    name match ("Hollywood Brown" for "Marquise Brown" won't match; it counts as unknown)."""
+    """Each starter's status as Claude reported it (None if no entry matched): by name, then a
+    looser name match, then slot. A slot counts only when exactly one entry carries it and that
+    entry isn't another starter by name, so a bench swap listed in the same slot can't stand in
+    for the starter. "Hollywood Brown" for "Marquise Brown" won't match."""
     by_name = {normalize(p.get("name") or ""): p.get("status") for p in said}
-    by_slot = {(p.get("slot") or "").upper(): p.get("status") for p in said if p.get("slot")}
+    starters = {normalize(r["name"]) for r in players}
+    by_slot: dict[str, list] = {}
+    for p in said:
+        if p.get("slot") and normalize(p.get("name") or "") not in starters:
+            by_slot.setdefault(p["slot"].upper(), []).append(p.get("status"))
     out = {}
     for r in players:
         key = normalize(r["name"])
-        status = by_name.get(key) or by_slot.get(r["slot"].upper())
+        status = by_name.get(key)
         if status is None:
             status = next((s for n, s in by_name.items() if n and key and (key in n or n in key)), None)
+        if status is None:
+            hits = by_slot.get(r["slot"].upper(), [])
+            status = hits[0] if len(hits) == 1 else None
         out[r["name"]] = status
     return out
 
@@ -213,13 +224,33 @@ def _run_kickoff(week, kickoff, now, games, check_fn, send_fn, notify_fn, clock)
     jobs: dict = {}
     job: dict = {}
     risky: list[dict] = []
+
+    def deliver() -> None:
+        if clock() >= kickoff:
+            job.pop("message", None)
+            job.update(done=True, result="kicked off before it could be sent")
+        else:
+            send_fn(job["message"])
+            job.setdefault("sent", []).append(clock().isoformat())
+            job["result"] = job.pop("sent_result", "sent")
+            job.pop("message")
+            job["done"] = not job.get("pending")
+        _save_bookkeeping(season, week, jobs)
+
     try:
         with _Lock():
             jobs = _bookkeeping(season, week)
             job = jobs.setdefault("inactives", {}).setdefault(kickoff.isoformat(), {})
             if job.get("done"):
                 return f"inactives {label}: {job.get('result', 'done')}"
-            if not job.get("message"):
+            check_now = True
+            if job.get("message"):  # an earlier run built it but couldn't send it
+                deliver()
+                # that send took the run a promised recheck was counting on: if no later run
+                # falls before the window closes, recheck now
+                check_now = not job["done"] and now + RUN_INTERVAL >= kickoff - WINDOW_CLOSE
+                now = clock()
+            if check_now:
                 if job.get("checks", 0) >= MAX_CHECKS:
                     job.update(done=True, result=f"gave up after {MAX_CHECKS} checks")
                     _save_bookkeeping(season, week, jobs)
@@ -252,21 +283,23 @@ def _run_kickoff(week, kickoff, now, games, check_fn, send_fn, notify_fn, clock)
                 out = [p for p in to_check if verdict[p["name"]] == "inactive"]
                 active = [p for p in to_check if verdict[p["name"]] == "active"]
                 unknown = [p for p in to_check if verdict[p["name"]] not in ("active", "inactive")]
+                unmatched = [p for p in to_check if verdict[p["name"]] is None]
                 message = (result.get("message") or "").strip()
-                if message and not out:  # a swap was written but the names didn't line up: trust it
-                    out, unknown = [p for p in to_check if p not in active], []
+                if message and not out and unmatched:  # a swap was written but its names didn't line up: trust it
+                    out = unmatched
+                    unknown = [p for p in unknown if p not in out]
                 if out and not message:  # never sit on an inactive starter for want of wording
                     message = (f"Lineup change before {kickoff:%-I:%M %p} ET:\n"
                                f"{', '.join(p['name'] for p in out)} inactive. Swap in a healthy bench player.")
                 retry = bool(unknown) and job["checks"] < MAX_CHECKS and now + RUN_INTERVAL < kickoff - WINDOW_CLOSE
-                parts = [message] if out or message else []
+                parts = [message] if out else []  # a note with nobody out isn't an alert
                 if job.get("promised") and active:  # Dan was told these were still being checked
                     parts.append(f"Now confirmed active: {_names(active)}. No change needed.")
                 if unknown and not retry:  # silence would read as all clear
                     parts.append(f"Couldn't confirm before the {kickoff:%-I:%M %p} ET kickoff: {_names(unknown)}. "
                                  "Check the inactives yourself.")
                 elif unknown and parts:
-                    parts.append(f"Not announced yet: {_names(unknown)}. Booth will check again before kickoff.")
+                    parts.append(f"Not announced yet: {_names(unknown)}. {PROMISE}")
                     job["promised"] = True
                 job["pending"] = unknown if retry else []
                 if not parts:
@@ -285,28 +318,21 @@ def _run_kickoff(week, kickoff, now, games, check_fn, send_fn, notify_fn, clock)
                     bits.append("rest pending" if retry else f"couldn't confirm {', '.join(p['name'] for p in unknown)}")
                 job["sent_result"] = "sent: " + ("; ".join(bits) or "follow-up")
                 _save_bookkeeping(season, week, jobs)
-            if clock() >= kickoff:
-                job.pop("message", None)
-                job.update(done=True, result="kicked off before it could be sent")
-                _save_bookkeeping(season, week, jobs)
-                return f"inactives {label}: {job['result']}"
-            send_fn(job["message"])
-            job.setdefault("sent", []).append(clock().isoformat())
-            job["result"] = job.pop("sent_result", "sent")
-            job.pop("message")
-            job["done"] = not job.get("pending")
-            _save_bookkeeping(season, week, jobs)
+                deliver()
     except LockBusy:
         return "inactives: skipped, another run in progress"
     except Exception as exc:
         _log(f"FAILED inactives {label}: {exc}\n{traceback.format_exc()}")
         job["last_error"] = str(exc)[:500]
-        last_chance = now + RUN_INTERVAL >= kickoff - WINDOW_CLOSE or (
-            not job.get("message") and job.get("checks", 0) >= MAX_CHECKS)
-        if last_chance:
+        if clock() >= kickoff:  # too late to help, and nothing goes out after kickoff
+            job.pop("message", None)
+            job.update(done=True, result="kicked off before the check finished")
+        elif now + RUN_INTERVAL >= kickoff - WINDOW_CLOSE or (
+                not job.get("message") and job.get("checks", 0) >= MAX_CHECKS):  # last chance
             who = _names(job.get("pending") or job.get("players") or risky) or "your starters"
-            text = job.get("message") or (f"Booth couldn't check inactives for the {kickoff:%-I:%M %p} ET games: "
-                                          f"{who}. Check them yourself before kickoff.")
+            text = (job.get("message") or "").replace(PROMISE, NO_RECHECK) or (
+                f"Booth couldn't check inactives for the {kickoff:%-I:%M %p} ET games: {who}. "
+                "Check them yourself before kickoff.")
             _alert_once(f"inactives-{kickoff.isoformat()}", text, send_fn, notify_fn)
         if jobs:
             try:
