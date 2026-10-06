@@ -96,7 +96,7 @@ def test_prior_snapshot_counts_only_delivered_reports_once_scheduled(tmp_path):
 
 def test_schema_matches_prd_fields():
     req = set(report.SNAPSHOT_SCHEMA["required"])
-    assert {"lineup", "bench_flags", "waiver_recs", "weather_flags", "sources", "message"} <= req
+    assert {"lineup", "bench_flags", "waiver_recs", "weather_flags", "sources", "message_blocks"} <= req
 
 
 @pytest.fixture
@@ -173,3 +173,193 @@ def test_parse_stream_rejects_guesswork(events, match):
 def test_mcp_server_starts_with_this_python():
     cfg = json.loads(report.mcp_config())["mcpServers"]["yahoo-fantasy"]
     assert cfg["command"] == sys.executable and cfg["args"] == ["-m", "booth.mcp_server"]
+
+
+def _blank_before(text):
+    lines = text.split("\n")
+    return [lines[i] for i in range(1, len(lines)) if lines[i] and not lines[i - 1]]
+
+
+def test_space_sections_separates_claims_and_sections():
+    raw = (FIX / "tue_wk5_dry_run.txt").read_text()
+    out = report.space_sections(raw)
+    assert [ln.split(" (")[0][:20] for ln in _blank_before(out)] == [
+        "2) Add Roman Wilson", "3) Add Dohnte Meyers", "Total $15, which lea", "Week 5 lineup",
+    ]
+    assert out.startswith("Submit before claims process Wed:\n1) Add Aaron Rodgers")  # heading stays on its list
+    assert "\n\n\n" not in out and out == out.strip()
+    assert report.space_sections(out) == out
+    # nothing but blank lines was added
+    assert [ln for ln in out.split("\n") if ln] == [ln.rstrip() for ln in raw.strip().split("\n") if ln.strip()]
+
+
+def test_space_sections_edge_cases():
+    sp = report.space_sections
+    assert sp("A\n\n\n\nB\r\nC   \n") == "A\n\nB\nC"
+    assert sp("Watch:\n- Spears Q\n- Dobbins weak\nWeather: wind at CHI@GB") == (
+        "Watch:\n- Spears Q\n- Dobbins weak\n\nWeather: wind at CHI@GB")
+    assert sp("Lineup\nQB Burrow 20\n12.7 pts/gm for Higbee\n2 TDs last week") == (
+        "Lineup\nQB Burrow 20\n12.7 pts/gm for Higbee\n2 TDs last week")
+    assert sp("1. Start Taylor\n- reason\n  more on that reason\n2. Sit Spears") == (
+        "1. Start Taylor\n- reason\n  more on that reason\n\n2. Sit Spears")
+    assert sp("Bench notes:\nWeather (6 days out):") == "Bench notes:\nWeather (6 days out):"
+    assert sp("- note ends with colon:\n- next") == "- note ends with colon:\n- next"
+    assert sp("") == ""
+
+
+def test_generate_spaces_the_model_message(isolated):
+    thu = datetime(2026, 10, 8, 12, 0, tzinfo=ZoneInfo("America/New_York"))
+    r = report.generate("thu", now=thu, claude=_fake_claude(message="1) Start Taylor\n- reason\n2) Sit Spears\n- reason"))
+    assert r["message"].endswith("1) Start Taylor\n- reason\n\n2) Sit Spears\n- reason")
+    assert r["path"].read_text() == r["message"] + "\n"
+
+
+
+UNCHANGED = [
+    # "-" notes under lineup lines, and an undecided slot ending in ":", stay inside the lineup
+    "Week 5 lineup (est):\nQB Burrow @MIA 20\nRB Dobbins @LAC 6\n- weak spot\nWR Collins @TEN 15\n- Q (hamstring)\nTE LaPorta @ARI 13",
+    "Lineup:\nQB Burrow @MIA 20\nFLEX1 (decide after 11:30 AM ET inactives):\n- Kraft if Watson is out\n- Concepcion if Watson plays\nFLEX2 Wilson @PIT 7\nK Aubrey vs TB 9",
+    "Final lineup:\nRB Taylor @PIT 18 (Q)\n- If Taylor is out, start Spears\nRB Dobbins @LAC 6",
+    # indented lines are continuations: never headings or numbered items
+    "Injuries to watch:\n- Taylor (Q): limited\n  If he's out Sunday, pivot to:\n  - Dobbins\n  - Spears\n- Collins (full)",
+    "Watch:\n- Taylor (Q). If he sits, in order:\n  1. Dobbins\n  2. Spears\n- Collins healthy",
+]
+
+
+@pytest.mark.parametrize("text", UNCHANGED)
+def test_space_sections_leaves_blocks_together(text):
+    assert report.space_sections(text) == text
+
+
+def test_space_sections_keeps_drop_lines_with_their_claim():
+    raw = ("1) Add Rodgers (QB PIT), bid $12\n- No QB in wk 6.\nIR: move Mason Taylor (O) to IR.\n"
+           "2) Add Wilson (WR PIT), bid $3\n- 6 targets a week.\nDrop: Darnell Mooney\n- 3.2 avg.\n"
+           "3) Add Meyers (WR CIN), bid $2\n- 89% snaps.\nDrop: Jalen Nailor\nTotal $17, $83 left.")
+    assert report.space_sections(raw) == (
+        "1) Add Rodgers (QB PIT), bid $12\n- No QB in wk 6.\nIR: move Mason Taylor (O) to IR.\n\n"
+        "2) Add Wilson (WR PIT), bid $3\n- 6 targets a week.\nDrop: Darnell Mooney\n- 3.2 avg.\n\n"
+        "3) Add Meyers (WR CIN), bid $2\n- 89% snaps.\nDrop: Jalen Nailor\n\nTotal $17, $83 left.")
+
+
+def test_space_sections_sub_headings():
+    sp = report.space_sections
+    assert sp("Check inactives:\n1:00 PM ET:\n- Taylor (Q)\n4:25 PM ET:\n- Collins (Q)") == (
+        "Check inactives:\n1:00 PM ET:\n- Taylor (Q)\n\n4:25 PM ET:\n- Collins (Q)")
+    assert sp("Final lineup:\n1 PM ET:\nQB Burrow 20\n4:25 PM ET:\nRB Dobbins 6") == (
+        "Final lineup:\n1 PM ET:\nQB Burrow 20\n\n4:25 PM ET:\nRB Dobbins 6")
+
+
+ROUND2 = [
+    # headings that start with a slot word are still headings
+    ("Total $15, $85 left.\nQB streamers for week 6, in order:\n1) Aaron Rodgers (PIT) $10, IR Mason Taylor\n"
+     "2) Tyson Bagent (CHI) $1\nIR moves first:\n1) Move Mason Taylor (O) to IR.",
+     "Total $15, $85 left.\n\nQB streamers for week 6, in order:\n1) Aaron Rodgers (PIT) $10, IR Mason Taylor\n\n"
+     "2) Tyson Bagent (CHI) $1\n\nIR moves first:\n1) Move Mason Taylor (O) to IR."),
+    ("Waivers done.\nK/DEF streamers for week 6:\n1) Aubrey\n2) Texans",
+     "Waivers done.\n\nK/DEF streamers for week 6:\n1) Aubrey\n\n2) Texans"),
+    # a claim's own "...:" lines stay with the claim
+    ("1) Add Aaron Rodgers (QB PIT) $12, move Mason Taylor (O) to IR.\n- Burrow and Murray on bye wk 6.\n"
+     "If you lose him, backups in order:\n- Bagent (CHI) $1\n2) Add Roman Wilson (WR PIT) $3\n"
+     "Drop one (both are dead weight):\n- Darnell Mooney (3.2 avg)\n- Jalen Nailor (1.8 avg)\nTotal $15, $85 left.",
+     "1) Add Aaron Rodgers (QB PIT) $12, move Mason Taylor (O) to IR.\n- Burrow and Murray on bye wk 6.\n"
+     "If you lose him, backups in order:\n- Bagent (CHI) $1\n\n2) Add Roman Wilson (WR PIT) $3\n"
+     "Drop one (both are dead weight):\n- Darnell Mooney (3.2 avg)\n- Jalen Nailor (1.8 avg)\n\nTotal $15, $85 left."),
+    ("2) Add Wilson (WR PIT) $3\n- 6 targets a week.\nDrop:\n- Darnell Mooney (3.2 avg)\n3) Add Meyers (WR CIN) $2, drop Nailor",
+     "2) Add Wilson (WR PIT) $3\n- 6 targets a week.\nDrop:\n- Darnell Mooney (3.2 avg)\n\n3) Add Meyers (WR CIN) $2, drop Nailor"),
+    ("Final calls:\n1) Start Taylor (Q, ankle).\n- ESPN Sat 9 PM: expected to play.\nIf he's ruled out at 11:30 AM ET:\n"
+     "- Start Spears in his RB slot.\n2) Sit Collins (Q, hamstring).\n- Didn't practice Fri.",
+     "Final calls:\n1) Start Taylor (Q, ankle).\n- ESPN Sat 9 PM: expected to play.\nIf he's ruled out at 11:30 AM ET:\n"
+     "- Start Spears in his RB slot.\n\n2) Sit Collins (Q, hamstring).\n- Didn't practice Fri."),
+    # a numbered item ending in ":" keeps its sub-heading
+    ("1) Thursday night, TB@DAL 8:15 PM ET:\nStart now:\n- Aubrey (K DAL)\n2) Sunday:\nCheck 11:30 AM ET inactives:\n- Taylor (Q)",
+     "1) Thursday night, TB@DAL 8:15 PM ET:\nStart now:\n- Aubrey (K DAL)\n\n2) Sunday:\nCheck 11:30 AM ET inactives:\n- Taylor (Q)"),
+    # a lineup line after a heading's note isn't split off
+    ("Week 5 lineup after claim 1:\n- all projections est\nQB Burrow @MIA 20\nRB Taylor @PIT 18",
+     "Week 5 lineup after claim 1:\n- all projections est\nQB Burrow @MIA 20\nRB Taylor @PIT 18"),
+    # the lineup's last line still gets a gap before the next section
+    ("Lineup:\nK Aubrey vs TB 9\nDEF Texans @TEN 8\nWeather:\n- wind at CHI@GB",
+     "Lineup:\nK Aubrey vs TB 9\nDEF Texans @TEN 8\n\nWeather:\n- wind at CHI@GB"),
+]
+
+UNCHANGED_ROUND2 = [
+    # notes ending in ":" between lineup lines stay inside the lineup
+    "Week 5 lineup (est):\nQB Burrow @MIA 20\nRB Dobbins @LAC 6\nWeak spot. Swap in if Spears clears:\n"
+    "- Tyjae Spears (TEN)\nWR Collins @TEN 15\nDEF Texans @TEN 8",
+    "Final lineup:\nQB Burrow @MIA 20\nRB Taylor @PIT 18 (Q)\nIf he's ruled out at 11:30 AM ET:\n- Spears\n"
+    "RB Dobbins @LAC 6\nWR Collins @TEN 15",
+    "Final lineup:\nQB Burrow @MIA 20\nRB Taylor @PIT 18\nStart one at FLEX after 11:30 inactives:\n"
+    "- Kraft if Watson is out\n- Concepcion if Watson plays\nTE LaPorta @ARI 13\nK Aubrey vs TB 9",
+    "Lineup:\nRB2: Dobbins @LAC 6\nWR1: Collins @TEN 15",
+]
+
+
+@pytest.mark.parametrize("raw,expected", ROUND2)
+def test_space_sections_round2(raw, expected):
+    assert report.space_sections(raw) == expected
+    assert report.space_sections(expected) == expected
+
+
+@pytest.mark.parametrize("text", UNCHANGED_ROUND2)
+def test_space_sections_keeps_lineup_notes_inside(text):
+    assert report.space_sections(text) == text
+
+
+def test_message_blocks_are_joined_with_blank_lines():
+    out = {"message_blocks": [
+        "Submit before claims process Wed:\n1) Add Rodgers (QB PIT) $10, IR Mason Taylor.\n- No QB in wk 6.",
+        "2) Add Wilson (WR PIT) $3, drop Mooney.\n- 6 targets a week.\r\n",
+        "  ",
+        "Week 5 lineup (est):\nQB Burrow @MIA 20\nRB Dobbins @LAC 6\nWeak spot. Swap in if Spears clears:\n- Spears\n"
+        "WR Collins @TEN 15",
+        "Top waiver names next week:\n1. Bagent\n2. Daniels\n\n\nWatch:\n- Taylor (Q)",
+    ]}
+    assert report.message_text(out) == (
+        "Submit before claims process Wed:\n1) Add Rodgers (QB PIT) $10, IR Mason Taylor.\n- No QB in wk 6.\n\n"
+        "2) Add Wilson (WR PIT) $3, drop Mooney.\n- 6 targets a week.\n\n"
+        "Week 5 lineup (est):\nQB Burrow @MIA 20\nRB Dobbins @LAC 6\nWeak spot. Swap in if Spears clears:\n- Spears\n"
+        "WR Collins @TEN 15\n\n"
+        "Top waiver names next week:\n1. Bagent\n\n2. Daniels\n\nWatch:\n- Taylor (Q)")
+
+
+def test_message_blocks_space_claims_written_together():
+    out = {"message_blocks": ["Claims:\n1) Add X $3\n- reason\n2) Add Y $2\n- reason", "Lineup:\nQB Burrow 20"]}
+    assert report.message_text(out) == "Claims:\n1) Add X $3\n- reason\n\n2) Add Y $2\n- reason\n\nLineup:\nQB Burrow 20"
+
+
+def test_crammed_blocks_are_spaced_too():
+    out = {"message_blocks": [
+        "Submit before claims process Wed:\n1) Add Rodgers $10, IR Mason Taylor.\n- reason a\n2) Add Wilson $3, drop Mooney.\n"
+        "- reason\n3) Add Meyers $2, drop Nailor.\n- reason\nTotal $15, $85 left.",
+        "Roster from manual list (Yahoo access pending)."]}
+    assert report.message_text(out) == (
+        "Submit before claims process Wed:\n1) Add Rodgers $10, IR Mason Taylor.\n- reason a\n\n"
+        "2) Add Wilson $3, drop Mooney.\n- reason\n\n3) Add Meyers $2, drop Nailor.\n- reason\n\nTotal $15, $85 left.\n\n"
+        "Roster from manual list (Yahoo access pending).")
+
+
+def test_if_he_sits_lines_stay_with_their_call():
+    raw = ("1) Start Taylor (Q).\n- expected to play.\nIf he sits: start Spears.\n2) Sit Collins (Q).\n- DNP Fri.\n"
+           "Otherwise start Wilson.\nWeather:\n- wind at CHI@GB\nIf you only make one move, start Spears.")
+    assert report.space_sections(raw) == (
+        "1) Start Taylor (Q).\n- expected to play.\nIf he sits: start Spears.\n\n2) Sit Collins (Q).\n- DNP Fri.\n"
+        "Otherwise start Wilson.\n\nWeather:\n- wind at CHI@GB\n\nIf you only make one move, start Spears.")
+
+
+def test_generate_joins_message_blocks(isolated):
+    thu = datetime(2026, 10, 8, 12, 0, tzinfo=ZoneInfo("America/New_York"))
+
+    def claude(prompt):
+        out = _fake_claude()(prompt)
+        out["structured_output"].pop("message")
+        out["structured_output"]["message_blocks"] = ["Start everyone.", "Lineup:\nQB Burrow @MIA 20"]
+        return out
+    r = report.generate("thu", now=thu, claude=claude)
+    assert r["message"].endswith("Start everyone.\n\nLineup:\nQB Burrow @MIA 20")
+    assert r["snapshot"]["message"] == "Start everyone.\n\nLineup:\nQB Burrow @MIA 20"
+
+
+def test_one_block_or_old_message_falls_back_to_space_sections():
+    raw = (FIX / "tue_wk5_dry_run.txt").read_text()
+    assert report.message_text({"message_blocks": [raw]}) == report.space_sections(raw)
+    assert report.message_text({"message": raw}) == report.space_sections(raw)
+    assert report.message_text({"message_blocks": []}) == ""
