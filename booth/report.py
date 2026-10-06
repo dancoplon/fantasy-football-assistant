@@ -57,6 +57,7 @@ SNAPSHOT_SCHEMA = {
         "message_blocks": {
             "type": "array",
             "items": {"type": "string"},
+            "minItems": 1,
             "description": "The message Dan reads, in blocks. Booth puts a blank line between blocks. "
                            "One block per section or numbered item: a heading together with its first item, "
                            "each numbered claim with its reasons and drop/IR line, the whole lineup, injuries "
@@ -232,7 +233,8 @@ _BULLET = re.compile(r"^\s*[-•*]\s")
 # "FLEX1 (after inactives):"). Case-sensitive, so "QB streamers for week 6:" is a heading.
 _SLOT = re.compile(r"^(QB|RB|WR|TE|FLEX|W/R/T|SUPERFLEX|SFLEX|K|DEF|DST|D/ST|BN|IR)\d?(\s+[A-Z(@]|\s*[(:])")
 # Plain lines that still belong to the numbered claim above them ("Drop: X", "IR: move Y").
-_CLAIM_CONTINUES = re.compile(r"^(drop|ir|move|free|bid|then)\b", re.IGNORECASE)
+_CLAIM_CONTINUES = re.compile(
+    r"^(drop|ir|move|free|bid|then|if (he|she|they)|otherwise|else|backups?|fallback|pivot|unless)\b", re.IGNORECASE)
 # Lines ending in ":" that open a part of the claim above them, not a new section.
 # ("IR moves first:" is left out on purpose: that reads as its own section.)
 _CLAIM_HEAD = re.compile(r"^(drop|free (the|a|up)|if|backups?|otherwise|else|fallback|pivot|unless)\b", re.IGNORECASE)
@@ -318,27 +320,14 @@ def _clean_block(block: str) -> str:
     return "\n".join(out).strip("\n")
 
 
-def _space_items(block: str) -> str:
-    """Within one block, a blank line before a numbered item when the item above it had
-    reason lines under it. A list of one-line items stays compact."""
-    out: list[str] = []
-    for line in block.split("\n"):
-        prev = out[-1] if out else ""
-        if _NUMBERED.match(line) and prev and not _NUMBERED.match(prev) and not prev.endswith(":"):
-            if any(_NUMBERED.match(ln) for ln in out):
-                out.append("")
-        out.append(line)
-    return "\n".join(out)
-
-
 def message_text(out: dict) -> str:
-    """The text Dan reads. Claude writes it as blocks (sections, claims, the lineup) and
-    each gets a blank line around it; a message that came back as one block is spaced
-    by space_sections instead."""
+    """The text Dan reads. Claude writes it as blocks (sections, claims, the lineup), joined
+    here with blank lines. space_sections spaces whatever a block still crams together, so
+    a message that came back as one block (or as a legacy "message") isn't a wall either."""
     blocks = [b for b in (_clean_block(b) for b in out.get("message_blocks") or []) if b]
-    if len(blocks) > 1:
-        return "\n\n".join(_space_items(b) for b in blocks)
-    return space_sections(blocks[0] if blocks else out.get("message") or "")
+    if not blocks:
+        blocks = [out.get("message") or ""]
+    return "\n\n".join(space_sections(b) for b in blocks).strip("\n")
 
 
 def generate(run: str, week: int | None = None, now: datetime | None = None, claude=run_claude) -> dict:

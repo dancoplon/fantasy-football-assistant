@@ -318,12 +318,44 @@ def test_message_blocks_are_joined_with_blank_lines():
         "2) Add Wilson (WR PIT) $3, drop Mooney.\n- 6 targets a week.\n\n"
         "Week 5 lineup (est):\nQB Burrow @MIA 20\nRB Dobbins @LAC 6\nWeak spot. Swap in if Spears clears:\n- Spears\n"
         "WR Collins @TEN 15\n\n"
-        "Top waiver names next week:\n1. Bagent\n2. Daniels\n\nWatch:\n- Taylor (Q)")
+        "Top waiver names next week:\n1. Bagent\n\n2. Daniels\n\nWatch:\n- Taylor (Q)")
 
 
 def test_message_blocks_space_claims_written_together():
     out = {"message_blocks": ["Claims:\n1) Add X $3\n- reason\n2) Add Y $2\n- reason", "Lineup:\nQB Burrow 20"]}
     assert report.message_text(out) == "Claims:\n1) Add X $3\n- reason\n\n2) Add Y $2\n- reason\n\nLineup:\nQB Burrow 20"
+
+
+def test_crammed_blocks_are_spaced_too():
+    out = {"message_blocks": [
+        "Submit before claims process Wed:\n1) Add Rodgers $10, IR Mason Taylor.\n- reason a\n2) Add Wilson $3, drop Mooney.\n"
+        "- reason\n3) Add Meyers $2, drop Nailor.\n- reason\nTotal $15, $85 left.",
+        "Roster from manual list (Yahoo access pending)."]}
+    assert report.message_text(out) == (
+        "Submit before claims process Wed:\n1) Add Rodgers $10, IR Mason Taylor.\n- reason a\n\n"
+        "2) Add Wilson $3, drop Mooney.\n- reason\n\n3) Add Meyers $2, drop Nailor.\n- reason\n\nTotal $15, $85 left.\n\n"
+        "Roster from manual list (Yahoo access pending).")
+
+
+def test_if_he_sits_lines_stay_with_their_call():
+    raw = ("1) Start Taylor (Q).\n- expected to play.\nIf he sits: start Spears.\n2) Sit Collins (Q).\n- DNP Fri.\n"
+           "Otherwise start Wilson.\nWeather:\n- wind at CHI@GB\nIf you only make one move, start Spears.")
+    assert report.space_sections(raw) == (
+        "1) Start Taylor (Q).\n- expected to play.\nIf he sits: start Spears.\n\n2) Sit Collins (Q).\n- DNP Fri.\n"
+        "Otherwise start Wilson.\n\nWeather:\n- wind at CHI@GB\n\nIf you only make one move, start Spears.")
+
+
+def test_generate_joins_message_blocks(isolated):
+    thu = datetime(2026, 10, 8, 12, 0, tzinfo=ZoneInfo("America/New_York"))
+
+    def claude(prompt):
+        out = _fake_claude()(prompt)
+        out["structured_output"].pop("message")
+        out["structured_output"]["message_blocks"] = ["Start everyone.", "Lineup:\nQB Burrow @MIA 20"]
+        return out
+    r = report.generate("thu", now=thu, claude=claude)
+    assert r["message"].endswith("Start everyone.\n\nLineup:\nQB Burrow @MIA 20")
+    assert r["snapshot"]["message"] == "Start everyone.\n\nLineup:\nQB Burrow @MIA 20"
 
 
 def test_one_block_or_old_message_falls_back_to_space_sections():
