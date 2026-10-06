@@ -48,8 +48,9 @@ def get_league_settings() -> dict:
 def get_my_roster(week: int | None = None) -> dict:
     """My team's roster (Mayor of Titty City) with each player's slot, eligible positions, and injury status.
 
-    week: NFL week; omit for today's roster. If Yahoo is unreachable, returns the manual
-    roster from config/manual_roster.json with source="manual" and its as_of date.
+    week: NFL week; omit for today's roster. If Yahoo is unreachable, returns Dan's copy of his
+    team page (config/manual_roster.local.json, else the seeded config/manual_roster.json) with
+    source="manual", its as_of date, and a "warning" when it may be out of date.
     """
     try:
         return client().my_roster(week)

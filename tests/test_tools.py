@@ -280,3 +280,49 @@ def test_manual_status_summarizes_each_copy(monkeypatch, tmp_path):
     assert "STALE" in text and "EXPIRED" in text and "Not used: this is week 6." in text
     monkeypatch.setattr(manual, "MANUAL_MATCHUP", _write(tmp_path / "m.json", {"week": 5}))
     assert "problem:" in manual.status(current_week=5)
+
+
+def test_unreadable_local_roster_falls_back_to_the_seed(monkeypatch, tmp_path):
+    from booth import manual
+    bad = tmp_path / "local.json"
+    bad.write_text('{"as_of": "2026-10-07", "players": [')  # cut off mid-write
+    monkeypatch.setattr(manual, "MANUAL_ROSTER_LOCAL", bad)
+    r = manual.manual_roster()
+    assert r["source"] == "manual" and len(r["players"]) == 25 and "couldn't be read" in r["warning"]
+
+    def boom():
+        raise YahooAccessError("401 not provisioned")
+    monkeypatch.setattr(mcp_server, "client", boom)
+    assert "couldn't be read" in mcp_server.get_my_roster()["warning"]
+
+
+def test_local_roster_without_a_date_is_still_used(monkeypatch, tmp_path):
+    from booth import manual
+    seed = json.loads(manual.MANUAL_ROSTER.read_text())
+    for as_of in (None, "Oct 7"):
+        local = {k: v for k, v in seed.items() if k != "as_of"} | ({"as_of": as_of} if as_of else {})
+        local["players"] = seed["players"][:24] + [{"name": "Aaron Rodgers", "position": "QB", "nfl_team": "PIT"}]
+        monkeypatch.setattr(manual, "MANUAL_ROSTER_LOCAL", _write(tmp_path / "local.json", local))
+        r = manual.manual_roster()
+        assert "Aaron Rodgers" in {p["name"] for p in r["players"]} and "no readable as_of" in r["warning"]
+
+
+@pytest.mark.parametrize("content", ['{"week": 5, "as_of": ', '{"week": "five", "as_of": "2026-10-08"}', "[]"])
+def test_unreadable_matchup_or_list_counts_as_missing(monkeypatch, tmp_path, content):
+    from booth import manual
+    (tmp_path / "m.json").write_text(content)
+    monkeypatch.setattr(manual, "MANUAL_MATCHUP", tmp_path / "m.json")
+    monkeypatch.setattr(manual, "MANUAL_FREE_AGENTS", tmp_path / "m.json")
+    assert manual.manual_matchup(5) is None and manual.manual_matchup(None) is None
+    assert manual.manual_free_agents() is None
+
+
+@pytest.mark.parametrize("which", ["MANUAL_ROSTER_LOCAL", "MANUAL_MATCHUP", "MANUAL_FREE_AGENTS"])
+def test_manual_status_fails_on_a_broken_copy(monkeypatch, tmp_path, capsys, which):
+    from booth import cli, manual
+    (tmp_path / "x.json").write_text("{not json")
+    monkeypatch.setattr(manual, which, tmp_path / "x.json")
+    monkeypatch.setattr(mcp_server.nflverse, "games", lambda: [])
+    monkeypatch.setattr(mcp_server.nflverse, "current_week", lambda games: 5)
+    assert cli.main(["manual-status"]) == 1
+    assert "problem:" in capsys.readouterr().out

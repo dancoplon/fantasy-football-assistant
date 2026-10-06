@@ -51,33 +51,55 @@ def roster_path() -> Path:
     return MANUAL_ROSTER_LOCAL if MANUAL_ROSTER_LOCAL.exists() else MANUAL_ROSTER
 
 
-def manual_roster(now: datetime | None = None) -> dict:
-    data = json.loads(roster_path().read_text())
+def _load_roster(path: Path, now: datetime) -> dict:
+    data = json.loads(path.read_text())
+    if not isinstance(data, dict) or not isinstance(data.get("players"), list) or not data["players"]:
+        raise ValueError("no players list")
     out = _public(data)
-    if now is None:
-        now = datetime.now(timezone.utc)
-    if now - _as_of(str(data["as_of"])) > ROSTER_STALE_AFTER:
+    try:
+        stale = now - _as_of(str(data["as_of"])) > ROSTER_STALE_AFTER
+    except (KeyError, ValueError):  # the date only drives the warning; the roster is still good
+        out["warning"] = "This roster copy has no readable as_of date, so it may be out of date."
+        return out
+    if stale:
         out["warning"] = f"This roster copy is from {data['as_of']}; Dan may have made moves since."
     return out
+
+
+def manual_roster(now: datetime | None = None) -> dict:
+    """Dan's roster copy, else the seeded one (with a warning saying so)."""
+    now = now or datetime.now(timezone.utc)
+    if MANUAL_ROSTER_LOCAL.exists():
+        try:
+            return _load_roster(MANUAL_ROSTER_LOCAL, now)
+        except (OSError, ValueError, TypeError) as exc:
+            out = _load_roster(MANUAL_ROSTER, now)
+            out["warning"] = (f"Dan's roster copy ({MANUAL_ROSTER_LOCAL.name}) couldn't be read ({str(exc)[:80]}), "
+                              f"so this is the older seeded list from {out.get('as_of')}; it may be out of date.")
+            return out
+    return _load_roster(MANUAL_ROSTER, now)
 
 
 def manual_free_agents(position: str | None = None, limit: int = 50, now: datetime | None = None) -> dict | None:
     """Dan's saved copy of Yahoo's available-players list, or None if there isn't a usable one."""
     if not MANUAL_FREE_AGENTS.exists():
         return None
-    data = json.loads(MANUAL_FREE_AGENTS.read_text())
-    if (now or datetime.now(timezone.utc)) - _as_of(data["as_of"]) > FREE_AGENTS_MAX_AGE:
+    try:
+        data = json.loads(MANUAL_FREE_AGENTS.read_text())
+        if (now or datetime.now(timezone.utc)) - _as_of(str(data["as_of"])) > FREE_AGENTS_MAX_AGE:
+            return None
+        wanted = {p.strip().upper() for p in position.split(",")} if position else None
+        if wanted and "W/R/T" in wanted:
+            wanted = (wanted - {"W/R/T"}) | FLEX
+        players = [p for p in data["players"] if not wanted or p.get("position") in wanted]
+        return {
+            "source": "manual",
+            "as_of": data["as_of"],
+            "note": data.get("note", ""),
+            "players": players[:limit],
+        }
+    except (OSError, ValueError, KeyError, TypeError, AttributeError):  # unreadable: same as no list
         return None
-    wanted = {p.strip().upper() for p in position.split(",")} if position else None
-    if wanted and "W/R/T" in wanted:
-        wanted = (wanted - {"W/R/T"}) | FLEX
-    players = [p for p in data["players"] if not wanted or p["position"] in wanted]
-    return {
-        "source": "manual",
-        "as_of": data["as_of"],
-        "note": data["note"],
-        "players": players[:limit],
-    }
 
 
 def manual_matchup(week: int | None, now: datetime | None = None) -> dict | None:
@@ -85,12 +107,16 @@ def manual_matchup(week: int | None, now: datetime | None = None) -> dict | None
     week is unknown, if it's recent). None otherwise."""
     if not MANUAL_MATCHUP.exists():
         return None
-    data = json.loads(MANUAL_MATCHUP.read_text())
-    if week is not None and int(data["week"]) != int(week):
+    try:
+        data = json.loads(MANUAL_MATCHUP.read_text())
+        copy_week = int(data["week"])
+        if week is not None and copy_week != int(week):
+            return None
+        if (now or datetime.now(timezone.utc)) - _as_of(str(data["as_of"])) > MATCHUP_MAX_AGE:
+            return None
+        return _public(data)
+    except (OSError, ValueError, KeyError, TypeError, AttributeError):  # unreadable: same as no copy
         return None
-    if (now or datetime.now(timezone.utc)) - _as_of(data["as_of"]) > MATCHUP_MAX_AGE:
-        return None
-    return _public(data)
 
 
 # --- Checks, for whoever writes these files ---------------------------------------------
@@ -178,6 +204,10 @@ def status(now: datetime | None = None, current_week: int | None = None) -> str:
     data, err = load(path)
     if err:
         lines.append(f"Roster ({path.name}): {err}")
+        if path == MANUAL_ROSTER_LOCAL:
+            lines.append(f"  problem: {path.name} can't be read, so reports use the older seeded roster. Fix or rewrite it.")
+        else:
+            lines.append(f"  problem: {path.name} can't be read, so reports have no roster.")
     else:
         problems = check_roster(data)
         as_of = _check_as_of(data, [])
@@ -189,6 +219,8 @@ def status(now: datetime | None = None, current_week: int | None = None) -> str:
     data, err = load(MANUAL_FREE_AGENTS)
     if err:
         lines.append(f"Available players: {err}. Waiver picks will be marked \"check he's available\".")
+        if err != "not there":
+            lines.append(f"  problem: {MANUAL_FREE_AGENTS.name} can't be read. Fix or rewrite it.")
     else:
         problems = check_free_agents(data)
         as_of = _check_as_of(data, [])
@@ -201,6 +233,8 @@ def status(now: datetime | None = None, current_week: int | None = None) -> str:
     data, err = load(MANUAL_MATCHUP)
     if err:
         lines.append(f"Matchup: {err}. Reports will say the opponent is unknown.")
+        if err != "not there":
+            lines.append(f"  problem: {MANUAL_MATCHUP.name} can't be read. Fix or rewrite it.")
     else:
         problems = check_matchup(data)
         opp = (data.get("opponent") or {}).get("team_name", "?")
