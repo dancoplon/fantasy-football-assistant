@@ -10,6 +10,7 @@ Reads my own team's data from the Yahoo Fantasy Sports API on a fixed weekly sch
 - **Thursday** — projected starting lineup for the week's matchup
 - **Saturday** — updated lineup, injury and weather flags
 - **Sunday** — final start/sit check before games lock
+- **Game days** — a short alert when a recommended starter is ruled inactive (only then)
 
 Reports combine Yahoo data with public sources (injury news, weather, player usage trends). Every suggestion includes a one- or two-line explanation.
 
@@ -96,6 +97,7 @@ Set `BOOTH_MODEL` to pick a model; the default is Claude Code's.
 - Delivery goes through `booth/deliver.py`, a single `send()` function. Telegram is preferred: create a bot with @BotFather and put its token in `.env` as `TELEGRAM_BOT_TOKEN`. Then run `uv run booth telegram-setup`: it prints a link with a one-time code; open it on the phone and tap Start, then run setup again. Only the chat that sent that code is connected (anyone can find a bot and message it); the chat is saved to `state/telegram.json` and gets a hello. Running setup again keeps the saved chat unless you pass `--replace`. Messages then come from the bot, so they don't show up twice the way a text to yourself does.
 - With a token set, Telegram is the channel. If a send fails (or setup hasn't been finished), Booth sends it by iMessage instead, prefixed with why, and `booth schedule status` shows "delivered ... by imessage (Telegram failed: ...)". Without an iMessage backup the send fails and Booth alerts by Mac notification and retries; it never goes quietly unsent.
 - iMessage goes to `IMESSAGE_RECIPIENT` in `.env`. `uv run booth schedule test-send` sends a test from the same background context the schedule uses, by the channel in use; add `--via imessage` to check the iMessage backup (that's where macOS asks for the "control Messages" permission) or `--via telegram` to check Telegram alone.
+- Inactives alert (`booth/inactives.py`): teams name inactive players 90 minutes before kickoff. When a run falls 80 to 5 minutes before a kickoff, Booth looks at that game's starters in the week's latest lineup report. If any carries an injury designation (in that report or the official injury report), one Claude run checks the inactives and picks a bench swap. Dan gets a message only if a starter is out, or if the last check before kickoff still couldn't confirm one; an alert goes out at once, and any starter whose list wasn't out yet is checked again (with a follow-up if he's active). Overlapping windows (4:05 and 4:25 PM) are each checked. Up to 2 checks per kickoff; nothing is sent after kickoff; healthy starters aren't checked; with the Mac asleep there's no check.
 - `uv run booth report <run> --send` sends a report by hand; if it's the one currently due, the schedule won't send it again.
 - `BOOTH_DRY_RUN=1` prefixes every scheduled message with `[DRY RUN]`.
 - `uv run booth schedule wake` (optional) asks for an admin password once and sets a wake one minute after the 8 AM reports on Tue/Sat/Sun. It only helps with the lid open.

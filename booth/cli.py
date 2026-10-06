@@ -6,6 +6,7 @@
   uv run booth report thu   generate a report (tue, thu, sat, sun) into reports/ and print it
   uv run booth report thu --send   ...and deliver it
   uv run booth run due      what launchd runs: build and send whichever report is due
+                            (and near each kickoff, check for inactive starters)
   uv run booth send-test    send a short test message (Telegram once set up, else iMessage)
   uv run booth telegram-setup   connect the Booth bot: prints a link to open in Telegram, then run it again
   uv run booth manual-status   check the copies of Dan's Yahoo pages used until Yahoo access works
@@ -155,12 +156,18 @@ def cmd_report(args: argparse.Namespace) -> int:
 
 
 def cmd_run(args: argparse.Namespace) -> int:
+    from booth.inactives import run_inactives
     from booth.jobs import EASTERN, run_due
 
-    outcome = run_due()
+    outcomes = [run_due()]
+    try:
+        outcomes.append(run_inactives())
+    except Exception as exc:  # never let the inactives check hide the report's outcome
+        outcomes.append(f"failed inactives: {exc}")
+    shown = [o for o in outcomes if o != "inactives: nothing due"]
     # launchd appends this to logs/launchd.out.log, which `booth schedule status` shows.
-    print(f"{datetime.now(EASTERN).strftime('%Y-%m-%d %H:%M:%S %Z')}  {outcome}")
-    return 1 if outcome.startswith("failed") else 0
+    print(f"{datetime.now(EASTERN).strftime('%Y-%m-%d %H:%M:%S %Z')}  {'; '.join(shown)}")
+    return 1 if any(o.startswith("failed") for o in outcomes) else 0
 
 
 def cmd_send_test(args: argparse.Namespace) -> int:
