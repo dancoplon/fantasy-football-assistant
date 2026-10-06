@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -92,14 +92,14 @@ def run(now, games, check, sent, notified=None, clock=None):
 
 
 @pytest.mark.parametrize("now,due", [
-    (at(15, 4), None),
-    (at(15, 5), KICKOFF),
-    (at(16, 19), KICKOFF),
-    (at(16, 20), None),
-    (at(8, 15), at(9, 30)),  # the London game
+    (at(15, 4), []),
+    (at(15, 5), [KICKOFF]),
+    (at(16, 19), [KICKOFF]),
+    (at(16, 20), []),
+    (at(8, 15), [at(9, 30)]),  # the London game
 ])
 def test_due_kickoff_window(games, now, due):
-    assert inactives.due_kickoff(now, 6, games) == due
+    assert inactives.due_kickoffs(now, 6, games) == due
 
 
 def test_at_risk_picks_injured_starters_in_that_game():
@@ -166,7 +166,7 @@ def test_inactive_starter_is_sent_once(env, games):
         "Bench James Cook (INACTIVE). Start Ray Davis (RB, BUF, 4:25 PM).\n"
         "- Cook ruled out with an ankle injury."
     )
-    assert job()["sent_at"] == at(15, 10).isoformat()
+    assert job()["sent"] == [at(15, 10).isoformat()] and job()["done"]
 
 
 def test_dry_run_prefix(env, games, monkeypatch):
@@ -227,7 +227,7 @@ def test_inactive_without_wording_still_goes_out(env, games):
     save_lineup()
     sent = []
     run(at(15, 10), games, Checker({**INACTIVE, "message": "  "}), sent)
-    assert sent == ["Booth: inactives alert, week 6\n\nLineup change before 4:25 PM ET:\n\n"
+    assert sent == ["Booth: inactives alert, week 6\n\nLineup change before 4:25 PM ET:\n"
                     "James Cook inactive. Swap in a healthy bench player."]
 
 
@@ -282,7 +282,7 @@ def test_kickoff_before_install_is_skipped(env, games):
     (jobs.state_dir() / "installed_at").write_text(at(15, 30).isoformat())
     save_lineup()
     check, sent = Checker(INACTIVE), []
-    assert run(at(15, 40), games, check, sent) == "inactives: this kickoff was before the schedule was installed"
+    assert run(at(15, 40), games, check, sent) == "inactives Sun 4:25 PM: before the schedule was installed"
     assert check.calls == []
 
 
@@ -323,3 +323,88 @@ def test_run_due_command_survives_an_inactives_crash(monkeypatch, capsys):
     monkeypatch.setattr(inactives, "run_inactives", boom)
     assert cli.main(["run", "due"]) == 1
     assert capsys.readouterr().out.rstrip().endswith("  nothing due; failed inactives: bad schedule")
+
+
+def late_window_games(games):
+    """Week 6 plus a 4:05 PM game, like most real Sundays (4:05 and 4:25 windows overlap)."""
+    extra = dict(next(g for g in games if g["game_id"] == "2026_06_BUF_LV"),
+                 game_id="2026_06_ARI_LA", away_team="ARI", home_team="LA", gametime="16:05")
+    return games + [extra]
+
+
+EARLY = datetime(2026, 10, 18, 16, 5, tzinfo=ET)
+
+
+@pytest.mark.parametrize("phase", [0, 5, 10, 15, 20, 25])
+def test_425_game_is_checked_even_with_a_405_game(env, games, phase):
+    """Every launchd phase checks the 4:25 starters, and retries when the list isn't out."""
+    games = late_window_games(games)
+    save_lineup({**LINEUP, "WR2": player("Davante Adams", "LAR")})  # 4:05 starter, healthy
+    check, sent = Checker(UNKNOWN, ACTIVE), []
+    runs = [at(14, 30 + phase) + timedelta(minutes=30 * i) for i in range(5)]
+    outcomes = [run(t, games, check, sent) for t in runs]
+    assert any("4:05 PM: no starters with an injury designation" in o for o in outcomes)
+    assert [c["kickoff"] for c in check.calls] == [KICKOFF] * len(check.calls) and check.calls
+    if phase < 10:  # first 4:25 check by 3:10 or so leaves room for a second one
+        assert len(check.calls) == 2 and job()["result"] == "all active"
+
+
+def test_both_late_kickoffs_checked_in_one_run(env, games):
+    games = late_window_games(games)
+    save_lineup({**LINEUP, "WR2": player("Davante Adams", "LAR", "Questionable")})
+    check, sent = Checker(ACTIVE | {"players": [{"name": "Davante Adams", "slot": "WR2", "status": "active"}]},
+                          INACTIVE), []
+    out = run(at(15, 10), games, check, sent)
+    assert out == "inactives Sun 4:05 PM: all active; inactives Sun 4:25 PM: sent: James Cook inactive"
+    assert [c["kickoff"] for c in check.calls] == [EARLY, KICKOFF] and len(sent) == 1
+
+
+TWO_Q = {**LINEUP, "TE": player("Brock Bowers", "LV", "Questionable")}
+
+
+def test_inactive_goes_out_now_and_the_unconfirmed_starter_is_rechecked(env, games):
+    save_lineup(TWO_Q)
+    first = {"players": [{"name": "James Cook", "slot": "RB1", "status": "inactive"},
+                         {"name": "Brock Bowers", "slot": "TE", "status": "unknown"}],
+             "message": INACTIVE["message"]}
+    check, sent = Checker(first, {"players": [{"name": "Brock Bowers", "slot": "TE", "status": "active"}],
+                                  "message": ""}), []
+    assert run(at(15, 10), games, check, sent) == "inactives Sun 4:25 PM: sent: James Cook inactive; rest pending"
+    assert "Bench James Cook (INACTIVE)" in sent[0]
+    assert sent[0].endswith("Not announced yet: Brock Bowers (Questionable). Booth will check again before kickoff.")
+    assert run(at(15, 40), games, check, sent) == "inactives Sun 4:25 PM: sent: follow-up"
+    assert [p["name"] for p in check.calls[1]["players"]] == ["Brock Bowers"]  # only the one still open
+    assert sent[1] == ("Booth: inactives alert, week 6\n\n"
+                       "Now confirmed active: Brock Bowers (Questionable). No change needed.")
+    assert run(at(16, 10), games, check, sent).endswith("sent: follow-up") and len(sent) == 2
+
+
+def test_inactive_with_no_time_to_recheck_names_the_unconfirmed(env, games):
+    save_lineup(TWO_Q)
+    first = {"players": [{"name": "James Cook", "slot": "RB1", "status": "inactive"},
+                         {"name": "Brock Bowers", "slot": "TE", "status": "unknown"}],
+             "message": INACTIVE["message"]}
+    sent = []
+    assert run(at(16, 0), games, Checker(first), sent).endswith(
+        "sent: James Cook inactive; couldn't confirm Brock Bowers")
+    assert "Bench James Cook" in sent[0] and "Couldn't confirm before the 4:25 PM ET kickoff: Brock Bowers" in sent[0]
+
+
+@pytest.mark.parametrize("said", [
+    {"name": "James Cook (RB1, BUF)", "slot": "RB1", "status": "inactive"},
+    {"name": "J. Cook", "slot": "RB1", "status": "inactive"},
+    {"name": "Cook", "slot": "", "status": "inactive"},
+])
+def test_verdict_matches_echoed_names_and_slots(env, games, said):
+    save_lineup()
+    sent = []
+    assert run(at(15, 10), games, Checker({"players": [said], "message": INACTIVE["message"]}), sent).endswith(
+        "sent: James Cook inactive")
+
+
+def test_a_written_swap_is_sent_even_if_names_dont_line_up(env, games):
+    save_lineup()
+    sent = []
+    said = {"players": [{"name": "Jim Cook", "slot": "RB", "status": "inactive"}], "message": INACTIVE["message"]}
+    assert run(at(15, 10), games, Checker(said), sent).endswith("sent: James Cook inactive")
+    assert "Bench James Cook (INACTIVE)" in sent[0]

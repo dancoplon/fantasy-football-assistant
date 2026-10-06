@@ -8,7 +8,7 @@ Teams announce inactive players 90 minutes before kickoff. These of Dan's recomm
 
 Games that have already kicked off (their players are locked): {locked_games}.
 
-1. For each player above, find out whether he is ACTIVE or INACTIVE for today's game. Web search for the team's inactives list or the player's status from the last 2 hours (team announcements, NFL.com, ESPN, beat reporters). get_injury_report has the official designations. If no inactives list is out yet, mark him "unknown". Never guess and never rely on memory.
+1. For each player above, find out whether he is ACTIVE or INACTIVE for today's game. Web search for the team's inactives list or the player's status from the last 2 hours (team announcements, NFL.com, ESPN, beat reporters). get_injury_report has the official designations. If no inactives list is out yet, mark him "unknown". Never guess and never rely on memory. In "players", give each one's name and slot exactly as listed above.
 2. Call get_my_roster. For each inactive starter, pick the best replacement from Dan's bench: healthy, eligible for that slot, not on a bye, and in a game that hasn't kicked off. Prefer a later game over none.
 3. Write the message only if at least one starter is inactive (otherwise leave "message" empty). Plain text for a phone, no markdown:
    - First line: "Lineup change before {kickoff} ET:"

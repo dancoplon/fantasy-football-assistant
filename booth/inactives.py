@@ -45,6 +45,7 @@ MAX_CHECKS = 2  # Claude runs per kickoff: one retry if the lists weren't out ye
 LINEUP_SOURCES = ("sun", "sat", "thu", "tue")  # newest lineup recommendation first
 HEALTHY = {"", "healthy", "active", "none", "probable", "p", "ok", "-", "n/a", "full"}
 # Yahoo/other spellings -> nflverse team codes
+NL = "\n\n"
 TEAM_ALIASES = {"LAR": "LA", "STL": "LA", "JAC": "JAX", "WSH": "WAS", "GNB": "GB", "KAN": "KC", "NOR": "NO",
                 "NWE": "NE", "SFO": "SF", "TAM": "TB", "LVR": "LV", "OAK": "LV", "SD": "LAC", "SDG": "LAC"}
 
@@ -57,10 +58,11 @@ SCHEMA = {
                 "type": "object",
                 "properties": {
                     "name": {"type": "string"},
+                    "slot": {"type": "string"},
                     "status": {"type": "string", "enum": ["active", "inactive", "unknown"]},
                     "source": {"type": "string"},
                 },
-                "required": ["name", "status"],
+                "required": ["name", "slot", "status"],
             },
         },
         "message": {"type": "string"},
@@ -84,12 +86,10 @@ def kickoffs(week: int, games: list[dict]) -> list[datetime]:
     return sorted({_kickoff(g) for g in games if int(g["week"]) == week})
 
 
-def due_kickoff(now: datetime, week: int, games: list[dict]) -> datetime | None:
-    """The kickoff whose inactives window (80 to 5 minutes before) contains `now`."""
-    for k in kickoffs(week, games):
-        if k - WINDOW_OPEN <= now < k - WINDOW_CLOSE:
-            return k
-    return None
+def due_kickoffs(now: datetime, week: int, games: list[dict]) -> list[datetime]:
+    """Kickoffs whose inactives window (80 to 5 minutes before) contains `now`. Windows
+    overlap (4:05 and 4:25 PM), so there can be two."""
+    return [k for k in kickoffs(week, games) if k - WINDOW_OPEN <= now < k - WINDOW_CLOSE]
 
 
 def latest_lineup(season: int, week: int) -> tuple[str, dict] | None:
@@ -159,9 +159,28 @@ def check(week: int, now: datetime, kickoff: datetime, players: list[dict], game
     return run_claude(prompt, timeout=600, schema=SCHEMA)["structured_output"]
 
 
+def _verdicts(players: list[dict], said: list[dict]) -> dict[str, str | None]:
+    """Each starter's status as Claude reported it: matched by name, then slot, then a looser
+    name match ("Hollywood Brown" for "Marquise Brown" won't match; it counts as unknown)."""
+    by_name = {normalize(p.get("name") or ""): p.get("status") for p in said}
+    by_slot = {(p.get("slot") or "").upper(): p.get("status") for p in said if p.get("slot")}
+    out = {}
+    for r in players:
+        key = normalize(r["name"])
+        status = by_name.get(key) or by_slot.get(r["slot"].upper())
+        if status is None:
+            status = next((s for n, s in by_name.items() if n and key and (key in n or n in key)), None)
+        out[r["name"]] = status
+    return out
+
+
+def _names(players: list[dict]) -> str:
+    return ", ".join(f"{p['name']} ({p['status']})" for p in players)
+
+
 def run_inactives(now: datetime | None = None, games: list[dict] | None = None, check_fn=check, send_fn=send,
                   notify_fn=notify, clock=None) -> str:
-    """Check inactives for the kickoff that's coming up, if any. Returns a one-line outcome."""
+    """Check inactives for each kickoff coming up, if any. Returns a one-line outcome."""
     load_dotenv(ROOT / ".env")
     if clock is None:
         clock = (lambda: now) if now else (lambda: datetime.now(EASTERN))
@@ -171,12 +190,24 @@ def run_inactives(now: datetime | None = None, games: list[dict] | None = None, 
     except Exception as exc:
         return f"inactives: couldn't load the NFL schedule: {exc}"
     week = nflverse.current_week(games, now.date())
-    kickoff = due_kickoff(now, week, games)
-    if kickoff is None:
+    due = due_kickoffs(now, week, games)
+    if not due:
         return "inactives: nothing due"
     since = installed_at()
-    if since is None or kickoff - WINDOW_OPEN < since:
-        return "inactives: this kickoff was before the schedule was installed"
+    outcomes = []
+    for i, kickoff in enumerate(due):
+        if since is None or kickoff - WINDOW_OPEN < since:
+            outcomes.append(f"inactives {kickoff:%a %-I:%M %p}: before the schedule was installed")
+            continue
+        at = now if i == 0 else clock()  # an earlier kickoff's check takes minutes
+        outcomes.append(_run_kickoff(week, kickoff, at, games, check_fn, send_fn, notify_fn, clock))
+    return "; ".join(outcomes)
+
+
+def _run_kickoff(week, kickoff, now, games, check_fn, send_fn, notify_fn, clock) -> str:
+    """One kickoff's check. Bookkeeping in the week file under jobs["inactives"][kickoff]:
+    checks so far, the starters at risk, "pending" (still unconfirmed, to check again),
+    and "message" (built but not sent yet)."""
     label = f"{kickoff:%a %-I:%M %p}"
     season = nflverse.SEASON
     jobs: dict = {}
@@ -190,59 +221,80 @@ def run_inactives(now: datetime | None = None, games: list[dict] | None = None, 
                 return f"inactives {label}: {job.get('result', 'done')}"
             if not job.get("message"):
                 if job.get("checks", 0) >= MAX_CHECKS:
-                    return f"inactives {label}: gave up after {MAX_CHECKS} checks"
-                found = latest_lineup(season, week)
-                if not found:
-                    job.update(done=True, result="no lineup report this week")
+                    job.update(done=True, result=f"gave up after {MAX_CHECKS} checks")
                     _save_bookkeeping(season, week, jobs)
-                    return f"inactives {label}: no lineup report this week"
-                _, lineup = found
-                teams = {t for g in games if int(g["week"]) == week and _kickoff(g) == kickoff
-                         for t in (g["home_team"], g["away_team"])}
-                names = [p["name"] for p in lineup.values() if p and p.get("name")]
-                risky = at_risk(lineup, teams, _official(week, names), _roster_teams())
-                if not risky:
-                    job.update(done=True, result="no starters with an injury designation")
-                    _save_bookkeeping(season, week, jobs)
-                    return f"inactives {label}: no starters with an injury designation"
-                _stay_awake()
-                job["checks"] = job.get("checks", 0) + 1
-                job["players"] = risky
-                _save_bookkeeping(season, week, jobs)
-                result = check_fn(week, now, kickoff, risky, games)
-                job["result_players"] = result.get("players", [])
-                said = {normalize(p.get("name", "")): p.get("status") for p in job["result_players"]}
-                found_out = [p["name"] for p in risky if said.get(normalize(p["name"])) == "inactive"]
-                # Anyone Claude didn't account for counts as not announced yet.
-                unknown = [p for p in risky if said.get(normalize(p["name"])) not in ("active", "inactive")]
-                message = (result.get("message") or "").strip()
-                if found_out and not message:  # never sit on an inactive starter for want of wording
-                    message = (f"Lineup change before {kickoff:%-I:%M %p} ET:\n\n"
-                               f"{', '.join(found_out)} inactive. Swap in a healthy bench player.")
-                if not found_out:
-                    retry = bool(unknown) and job["checks"] < MAX_CHECKS and now + RUN_INTERVAL < kickoff - WINDOW_CLOSE
-                    if retry or not unknown:
-                        job["done"] = not retry
-                        job["result"] = ("not announced yet, will check again" if retry else "all active")
+                    return f"inactives {label}: {job['result']}"
+                if job.get("pending"):
+                    to_check = job["pending"]
+                else:
+                    found = latest_lineup(season, week)
+                    if not found:
+                        job.update(done=True, result="no lineup report this week")
                         _save_bookkeeping(season, week, jobs)
                         return f"inactives {label}: {job['result']}"
-                    # Last check and still no answer: silence would read as all clear.
-                    who = ", ".join(f"{p['name']} ({p['status']})" for p in unknown)
-                    message = (f"Couldn't confirm before the {kickoff:%-I:%M %p} ET kickoff: {who}. "
-                               f"Check the inactives yourself.")
-                text = f"Booth: inactives alert, week {week}\n\n{space_sections(message)}"
+                    _, lineup = found
+                    teams = {t for g in games if int(g["week"]) == week and _kickoff(g) == kickoff
+                             for t in (g["home_team"], g["away_team"])}
+                    names = [p["name"] for p in lineup.values() if p and p.get("name")]
+                    risky = at_risk(lineup, teams, _official(week, names), _roster_teams())
+                    if not risky:
+                        job.update(done=True, result="no starters with an injury designation")
+                        _save_bookkeeping(season, week, jobs)
+                        return f"inactives {label}: {job['result']}"
+                    job["players"] = to_check = risky
+                _stay_awake()
+                job["checks"] = job.get("checks", 0) + 1
+                _save_bookkeeping(season, week, jobs)
+                result = check_fn(week, now, kickoff, to_check, games)
+                said = result.get("players") or []
+                job.setdefault("results", []).append(said)
+                verdict = _verdicts(to_check, said)
+                out = [p for p in to_check if verdict[p["name"]] == "inactive"]
+                active = [p for p in to_check if verdict[p["name"]] == "active"]
+                unknown = [p for p in to_check if verdict[p["name"]] not in ("active", "inactive")]
+                message = (result.get("message") or "").strip()
+                if message and not out:  # a swap was written but the names didn't line up: trust it
+                    out, unknown = [p for p in to_check if p not in active], []
+                if out and not message:  # never sit on an inactive starter for want of wording
+                    message = (f"Lineup change before {kickoff:%-I:%M %p} ET:\n"
+                               f"{', '.join(p['name'] for p in out)} inactive. Swap in a healthy bench player.")
+                retry = bool(unknown) and job["checks"] < MAX_CHECKS and now + RUN_INTERVAL < kickoff - WINDOW_CLOSE
+                parts = [message] if out or message else []
+                if job.get("promised") and active:  # Dan was told these were still being checked
+                    parts.append(f"Now confirmed active: {_names(active)}. No change needed.")
+                if unknown and not retry:  # silence would read as all clear
+                    parts.append(f"Couldn't confirm before the {kickoff:%-I:%M %p} ET kickoff: {_names(unknown)}. "
+                                 "Check the inactives yourself.")
+                elif unknown and parts:
+                    parts.append(f"Not announced yet: {_names(unknown)}. Booth will check again before kickoff.")
+                    job["promised"] = True
+                job["pending"] = unknown if retry else []
+                if not parts:
+                    job["done"] = not retry
+                    job["result"] = "not announced yet, will check again" if retry else "all active"
+                    _save_bookkeeping(season, week, jobs)
+                    return f"inactives {label}: {job['result']}"
+                text = f"Booth: inactives alert, week {week}\n\n{space_sections(NL.join(parts))}"
                 if os.getenv("BOOTH_DRY_RUN") == "1":
                     text = f"[DRY RUN] {text}"
                 job["message"] = text
-                job["sent_result"] = (f"sent: {', '.join(found_out)} inactive" if found_out
-                                      else f"sent: couldn't confirm {', '.join(p['name'] for p in unknown)}")
+                bits = []
+                if out:
+                    bits.append(f"{', '.join(p['name'] for p in out)} inactive")
+                if unknown:
+                    bits.append("rest pending" if retry else f"couldn't confirm {', '.join(p['name'] for p in unknown)}")
+                job["sent_result"] = "sent: " + ("; ".join(bits) or "follow-up")
                 _save_bookkeeping(season, week, jobs)
             if clock() >= kickoff:
+                job.pop("message", None)
                 job.update(done=True, result="kicked off before it could be sent")
                 _save_bookkeeping(season, week, jobs)
-                return f"inactives {label}: kicked off before it could be sent"
+                return f"inactives {label}: {job['result']}"
             send_fn(job["message"])
-            job.update(done=True, result=job.get("sent_result", "sent"), sent_at=clock().isoformat())
+            job.setdefault("sent", []).append(clock().isoformat())
+            job["result"] = job.pop("sent_result", "sent")
+            job.pop("message")
+            job["done"] = not job.get("pending")
             _save_bookkeeping(season, week, jobs)
     except LockBusy:
         return "inactives: skipped, another run in progress"
@@ -252,7 +304,7 @@ def run_inactives(now: datetime | None = None, games: list[dict] | None = None, 
         last_chance = now + RUN_INTERVAL >= kickoff - WINDOW_CLOSE or (
             not job.get("message") and job.get("checks", 0) >= MAX_CHECKS)
         if last_chance:
-            who = ", ".join(f"{p['name']} ({p['status']})" for p in (job.get("players") or risky)) or "your starters"
+            who = _names(job.get("pending") or job.get("players") or risky) or "your starters"
             text = job.get("message") or (f"Booth couldn't check inactives for the {kickoff:%-I:%M %p} ET games: "
                                           f"{who}. Check them yourself before kickoff.")
             _alert_once(f"inactives-{kickoff.isoformat()}", text, send_fn, notify_fn)
