@@ -4,9 +4,10 @@
   uv run booth check   refresh the token and pull league settings (Milestone 1 check)
   uv run booth data-check   pull each external source once and print a short summary
   uv run booth report thu   generate a report (tue, thu, sat, sun) into reports/ and print it
-  uv run booth report thu --send   ...and deliver it (iMessage)
+  uv run booth report thu --send   ...and deliver it
   uv run booth run due      what launchd runs: build and send whichever report is due
-  uv run booth send-test    send a short test iMessage
+  uv run booth send-test    send a short test message (Telegram once set up, else iMessage)
+  uv run booth telegram-setup   connect the Booth bot after saying "hi" to it in Telegram
   uv run booth schedule install|uninstall|status|wake|test-send
 """
 
@@ -173,6 +174,17 @@ def cmd_send_test(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_telegram_setup(args: argparse.Namespace) -> int:
+    from booth.deliver import DeliveryError, telegram_setup
+
+    try:
+        print(telegram_setup())
+    except DeliveryError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    return 0
+
+
 def cmd_schedule(args: argparse.Namespace) -> int:
     from booth import schedule
 
@@ -209,6 +221,8 @@ def main(argv: list[str] | None = None) -> int:
     p_run.add_argument("what", choices=["due"])
     p_run.set_defaults(func=cmd_run)
     sub.add_parser("send-test", help="send a test message").set_defaults(func=cmd_send_test)
+    sub.add_parser("telegram-setup", help="connect your Booth bot after saying hi to it in Telegram").set_defaults(
+        func=cmd_telegram_setup)
     p_sch = sub.add_parser("schedule", help="manage the launchd job (macOS)")
     p_sch.add_argument("action", choices=["install", "uninstall", "status", "wake", "test-send"])
     p_sch.set_defaults(func=cmd_schedule)
