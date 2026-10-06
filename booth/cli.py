@@ -8,6 +8,7 @@
   uv run booth run due      what launchd runs: build and send whichever report is due
   uv run booth send-test    send a short test message (Telegram once set up, else iMessage)
   uv run booth telegram-setup   connect the Booth bot: prints a link to open in Telegram, then run it again
+  uv run booth manual-status   check the copies of Dan's Yahoo pages used until Yahoo access works
   uv run booth schedule install|uninstall|status|wake|test-send
 """
 
@@ -174,6 +175,20 @@ def cmd_send_test(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_manual_status(args: argparse.Namespace) -> int:
+    from booth import manual
+    from booth.data import nflverse
+    from booth.data.cache import DataSourceError
+
+    try:
+        week = nflverse.current_week(nflverse.games())
+    except DataSourceError:
+        week = None
+    text = manual.status(current_week=week)
+    print(text)
+    return 1 if "problem:" in text else 0
+
+
 def cmd_telegram_setup(args: argparse.Namespace) -> int:
     from booth.deliver import DeliveryError, telegram_setup
 
@@ -227,6 +242,8 @@ def main(argv: list[str] | None = None) -> int:
     p_tg = sub.add_parser("telegram-setup", help="connect your Booth bot to your Telegram chat")
     p_tg.add_argument("--replace", action="store_true", help="connect a different chat than the saved one")
     p_tg.set_defaults(func=cmd_telegram_setup)
+    sub.add_parser("manual-status", help="check the roster/players/matchup copies used until Yahoo works").set_defaults(
+        func=cmd_manual_status)
     p_sch = sub.add_parser("schedule", help="manage the launchd job (macOS)")
     p_sch.add_argument("action", choices=["install", "uninstall", "status", "wake", "test-send"])
     p_sch.add_argument("--via", choices=["telegram", "imessage"], help="test-send: test this channel")

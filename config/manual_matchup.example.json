@@ -1,0 +1,52 @@
+{
+  "_note": "Example of config/manual_matchup.json (gitignored), Dan's Yahoo matchup page copied while Yahoo access is pending. Made-up teams and players. get_matchup uses it only for its own week, and not after 8 days.",
+  "as_of": "2026-10-08T09:15:00-04:00",
+  "week": 5,
+  "note": "Copied from Dan's screenshot of his Yahoo matchup page. Projections are Yahoo's at that time.",
+  "me": {
+    "team_name": "Mayor of Titty City",
+    "projected_points": 112.4,
+    "points": 0
+  },
+  "opponent": {
+    "team_name": "Example Opponent",
+    "manager": "Example Manager",
+    "record": "2-2",
+    "projected_points": 118.1,
+    "points": 0,
+    "starters": [
+      {
+        "slot": "QB",
+        "name": "Example Quarterback",
+        "nfl_team": "BUF",
+        "position": "QB",
+        "projection": 21.3,
+        "status": ""
+      },
+      {
+        "slot": "RB",
+        "name": "Example Running Back",
+        "nfl_team": "ATL",
+        "position": "RB",
+        "projection": 15.2,
+        "status": "Q"
+      },
+      {
+        "slot": "WR",
+        "name": "Example Receiver",
+        "nfl_team": "DAL",
+        "position": "WR",
+        "projection": 13.0,
+        "status": ""
+      },
+      {
+        "slot": "DEF",
+        "name": "Example Defense",
+        "nfl_team": "PIT",
+        "position": "DEF",
+        "projection": 7.0,
+        "status": ""
+      }
+    ]
+  }
+}

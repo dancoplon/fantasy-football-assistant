@@ -17,8 +17,10 @@ oauth2.json
 state/
 logs/
 reports/
-# League data copied by hand from Yahoo (see config/manual_free_agents.example.json).
+# League data copied by hand from Yahoo (see config/*.example.json).
 config/manual_free_agents.json
+config/manual_matchup.json
+config/manual_roster.local.json
 
 # --- Python ----------------------------------------------------------------------
 __pycache__/
