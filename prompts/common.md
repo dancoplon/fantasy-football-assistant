@@ -17,7 +17,9 @@ Games this week that have already kicked off (their players are locked and can't
 - A player on a bye scores zero. Never start one.
 
 ## The message
-- Plain text for iMessage: no markdown headers, tables, bold, or emoji. Short lines. Use "-" for bullets.
+- Plain text for a phone message: no markdown headers, tables, bold, or emoji. Short lines. Use "-" for bullets.
+- Dan reads this on a phone, so write it as message_blocks: Booth puts a blank line between blocks. One block per section or numbered item: a heading goes in the same block as its first item; each numbered claim is its own block (its action line with any drop/IR move, then its "-" reasons); the lineup is one block; then injuries to watch, weather, closing notes (a FAAB total or closing line is its own block). No blank lines inside a block.
+- Start every lineup line with its slot, and keep a slot's note in parentheses on that line, e.g. "RB Dobbins @LAC 6 (weak spot)" or "FLEX (after 11:30 AM inactives): Kraft if Watson is out, else Concepcion".
 - Lead with what Dan needs to do, then the detail.
 - Do NOT write a "Changes since last report" section; Booth adds that automatically.
 - Length: {length_hint}.
