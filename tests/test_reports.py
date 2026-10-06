@@ -173,3 +173,42 @@ def test_parse_stream_rejects_guesswork(events, match):
 def test_mcp_server_starts_with_this_python():
     cfg = json.loads(report.mcp_config())["mcpServers"]["yahoo-fantasy"]
     assert cfg["command"] == sys.executable and cfg["args"] == ["-m", "booth.mcp_server"]
+
+
+def _blank_before(text):
+    lines = text.split("\n")
+    return [lines[i] for i in range(1, len(lines)) if lines[i] and not lines[i - 1]]
+
+
+def test_space_sections_separates_claims_and_sections():
+    raw = (FIX / "tue_wk5_dry_run.txt").read_text()
+    out = report.space_sections(raw)
+    assert [ln.split(" (")[0][:20] for ln in _blank_before(out)] == [
+        "2) Add Roman Wilson", "3) Add Dohnte Meyers", "Total $15, which lea", "Week 5 lineup",
+    ]
+    assert out.startswith("Submit before claims process Wed:\n1) Add Aaron Rodgers")  # heading stays on its list
+    assert "\n\n\n" not in out and out == out.strip()
+    assert report.space_sections(out) == out
+    # nothing but blank lines was added
+    assert [ln for ln in out.split("\n") if ln] == [ln.rstrip() for ln in raw.strip().split("\n") if ln.strip()]
+
+
+def test_space_sections_edge_cases():
+    sp = report.space_sections
+    assert sp("A\n\n\n\nB\r\nC   \n") == "A\n\nB\nC"
+    assert sp("Watch:\n- Spears Q\n- Dobbins weak\nWeather: wind at CHI@GB") == (
+        "Watch:\n- Spears Q\n- Dobbins weak\n\nWeather: wind at CHI@GB")
+    assert sp("Lineup\nQB Burrow 20\n12.7 pts/gm for Higbee\n2 TDs last week") == (
+        "Lineup\nQB Burrow 20\n12.7 pts/gm for Higbee\n2 TDs last week")
+    assert sp("1. Start Taylor\n- reason\n  more on that reason\n2. Sit Spears") == (
+        "1. Start Taylor\n- reason\n  more on that reason\n\n2. Sit Spears")
+    assert sp("Bench notes:\nWeather (6 days out):") == "Bench notes:\n\nWeather (6 days out):"
+    assert sp("- note ends with colon:\n- next") == "- note ends with colon:\n- next"
+    assert sp("") == ""
+
+
+def test_generate_spaces_the_model_message(isolated):
+    thu = datetime(2026, 10, 8, 12, 0, tzinfo=ZoneInfo("America/New_York"))
+    r = report.generate("thu", now=thu, claude=_fake_claude(message="1) Start Taylor\n- reason\n2) Sit Spears\n- reason"))
+    assert r["message"].endswith("1) Start Taylor\n- reason\n\n2) Sit Spears\n- reason")
+    assert r["path"].read_text() == r["message"] + "\n"

@@ -1,0 +1,24 @@
+Submit before claims process Wed:
+1) Add Aaron Rodgers (QB PIT) $10. Free the spot: move Mason Taylor (O) to IR.
+- Burrow and Murray both have a week 6 bye (CIN, MIN). Without a pickup you have no QB that week.
+- Rodgers had 22.7 and 22.0 the last 2 weeks. Plays @TB in week 6. He's 42 so no dynasty value, but this costs no drop.
+- If you lose him, Bagent (CHI) and J. Daniels (TB) are on your list as backups.
+2) Add Roman Wilson (WR PIT) $3, drop Darnell Mooney.
+- 6 targets every week, 11.2 avg (est). Snaps fell to 31-39% though, so he's TD-dependent.
+- Mooney: 3.2 avg, 0 catches in wk 4. Little dynasty value.
+3) Add Dohnte Meyers (WR CIN) $2, drop Jalen Nailor.
+- Rising role: 89% snaps, 9 targets in wk 4. Plays @MIA this week (CIN implied 24.7). CIN on bye wk 6.
+- Nailor (Q) averages 1.8. He's a dart throw on both counts.
+Total $15, which leaves $85 in reserve.
+
+Week 5 lineup (all projections are est):
+QB Burrow @MIA 20
+RB Taylor @PIT 18
+RB Dobbins @LAC 6 (weak spot, wire has no RB upgrade)
+WR Collins @TEN 15
+WR Odunze @GB 9
+TE LaPorta @ARI 13 (DET implied 29.5)
+FLEX Kraft @GB 8 (23% target share wk 4)
+FLEX Concepcion @NYJ 7 (24-30% target share)
+K Aubrey vs TB 9
+DEF Texans @TEN 8 (TEN implied 16.2)

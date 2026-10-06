@@ -18,6 +18,7 @@ Games this week that have already kicked off (their players are locked and can't
 
 ## The message
 - Plain text for iMessage: no markdown headers, tables, bold, or emoji. Short lines. Use "-" for bullets.
+- Dan reads this on a phone, so space it out: a blank line between sections (claims, lineup, injuries to watch, weather, closing notes) and between numbered items. Each numbered item is its action line, then its "-" reasons, then a blank line.
 - Lead with what Dan needs to do, then the detail.
 - Do NOT write a "Changes since last report" section; Booth adds that automatically.
 - Length: {length_hint}.

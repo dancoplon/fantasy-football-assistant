@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 import sys
 from datetime import date, datetime
@@ -218,6 +219,39 @@ def locked_games_at(week: int, games: list[dict], now: datetime) -> str:
     return "; ".join(f"{g['away']}@{g['home']}" for g in started) or "none yet"
 
 
+_NUMBERED = re.compile(r"^\s*\d{1,2}[.)]\s")
+_BULLET = re.compile(r"^\s*[-•*]\s")
+
+
+def _is_heading(line: str) -> bool:
+    return line.rstrip().endswith(":") and not _BULLET.match(line) and not _NUMBERED.match(line)
+
+
+def space_sections(text: str) -> str:
+    """Put a blank line between a report's sections so it isn't a wall of text on a phone.
+
+    A blank line goes before each numbered item (unless a heading introduces it), before
+    each heading line ending in ":", and where a "-" list gives way to plain text. Runs
+    of blank lines collapse to one. The model is asked for this too; this makes it certain.
+    """
+    out: list[str] = []
+    for line in text.replace("\r\n", "\n").replace("\r", "\n").split("\n"):
+        line = line.rstrip()
+        if not line:
+            if out and out[-1]:
+                out.append("")
+            continue
+        prev = out[-1] if out else ""
+        if prev and (
+            (_NUMBERED.match(line) and not _is_heading(prev))
+            or _is_heading(line)
+            or (_BULLET.match(prev) and not _BULLET.match(line) and not line.startswith((" ", "\t")))
+        ):
+            out.append("")
+        out.append(line)
+    return "\n".join(out).strip("\n")
+
+
 def generate(run: str, week: int | None = None, now: datetime | None = None, claude=run_claude) -> dict:
     """Generate one report. Returns {"message", "path", "snapshot", "changes"}."""
     if run not in RUN_LABELS:
@@ -241,7 +275,7 @@ def generate(run: str, week: int | None = None, now: datetime | None = None, cla
     }
 
     changes: list[str] = []
-    message = out["message"].strip()
+    message = space_sections(out["message"])
     if run in DIFF_AGAINST:
         prev = prior_snapshot(nflverse.SEASON, week, run)
         changes = diff_snapshots(prev, snapshot)
