@@ -202,7 +202,7 @@ def test_space_sections_edge_cases():
         "Lineup\nQB Burrow 20\n12.7 pts/gm for Higbee\n2 TDs last week")
     assert sp("1. Start Taylor\n- reason\n  more on that reason\n2. Sit Spears") == (
         "1. Start Taylor\n- reason\n  more on that reason\n\n2. Sit Spears")
-    assert sp("Bench notes:\nWeather (6 days out):") == "Bench notes:\n\nWeather (6 days out):"
+    assert sp("Bench notes:\nWeather (6 days out):") == "Bench notes:\nWeather (6 days out):"
     assert sp("- note ends with colon:\n- next") == "- note ends with colon:\n- next"
     assert sp("") == ""
 
@@ -212,3 +212,38 @@ def test_generate_spaces_the_model_message(isolated):
     r = report.generate("thu", now=thu, claude=_fake_claude(message="1) Start Taylor\n- reason\n2) Sit Spears\n- reason"))
     assert r["message"].endswith("1) Start Taylor\n- reason\n\n2) Sit Spears\n- reason")
     assert r["path"].read_text() == r["message"] + "\n"
+
+
+
+UNCHANGED = [
+    # "-" notes under lineup lines, and an undecided slot ending in ":", stay inside the lineup
+    "Week 5 lineup (est):\nQB Burrow @MIA 20\nRB Dobbins @LAC 6\n- weak spot\nWR Collins @TEN 15\n- Q (hamstring)\nTE LaPorta @ARI 13",
+    "Lineup:\nQB Burrow @MIA 20\nFLEX1 (decide after 11:30 AM ET inactives):\n- Kraft if Watson is out\n- Concepcion if Watson plays\nFLEX2 Wilson @PIT 7\nK Aubrey vs TB 9",
+    "Final lineup:\nRB Taylor @PIT 18 (Q)\n- If Taylor is out, start Spears\nRB Dobbins @LAC 6",
+    # indented lines are continuations: never headings or numbered items
+    "Injuries to watch:\n- Taylor (Q): limited\n  If he's out Sunday, pivot to:\n  - Dobbins\n  - Spears\n- Collins (full)",
+    "Watch:\n- Taylor (Q). If he sits, in order:\n  1. Dobbins\n  2. Spears\n- Collins healthy",
+]
+
+
+@pytest.mark.parametrize("text", UNCHANGED)
+def test_space_sections_leaves_blocks_together(text):
+    assert report.space_sections(text) == text
+
+
+def test_space_sections_keeps_drop_lines_with_their_claim():
+    raw = ("1) Add Rodgers (QB PIT), bid $12\n- No QB in wk 6.\nIR: move Mason Taylor (O) to IR.\n"
+           "2) Add Wilson (WR PIT), bid $3\n- 6 targets a week.\nDrop: Darnell Mooney\n- 3.2 avg.\n"
+           "3) Add Meyers (WR CIN), bid $2\n- 89% snaps.\nDrop: Jalen Nailor\nTotal $17, $83 left.")
+    assert report.space_sections(raw) == (
+        "1) Add Rodgers (QB PIT), bid $12\n- No QB in wk 6.\nIR: move Mason Taylor (O) to IR.\n\n"
+        "2) Add Wilson (WR PIT), bid $3\n- 6 targets a week.\nDrop: Darnell Mooney\n- 3.2 avg.\n\n"
+        "3) Add Meyers (WR CIN), bid $2\n- 89% snaps.\nDrop: Jalen Nailor\n\nTotal $17, $83 left.")
+
+
+def test_space_sections_sub_headings():
+    sp = report.space_sections
+    assert sp("Check inactives:\n1:00 PM ET:\n- Taylor (Q)\n4:25 PM ET:\n- Collins (Q)") == (
+        "Check inactives:\n1:00 PM ET:\n- Taylor (Q)\n\n4:25 PM ET:\n- Collins (Q)")
+    assert sp("Final lineup:\n1 PM ET:\nQB Burrow 20\n4:25 PM ET:\nRB Dobbins 6") == (
+        "Final lineup:\n1 PM ET:\nQB Burrow 20\n\n4:25 PM ET:\nRB Dobbins 6")
