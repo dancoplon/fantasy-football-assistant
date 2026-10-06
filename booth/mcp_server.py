@@ -13,7 +13,7 @@ from booth.config import ConfigError, Settings
 from booth.context import league_config, strategy_text
 from booth.data import nflverse, sleeper, weather
 from booth.data.cache import DataSourceError
-from booth.manual import manual_free_agents, manual_roster
+from booth.manual import manual_free_agents, manual_matchup, manual_roster
 from booth.yahoo import YahooAccessError, YahooClient
 
 mcp = MCPServer("yahoo-fantasy")
@@ -80,12 +80,21 @@ def get_free_agents(position: str | None = None, limit: int = 50, sort_type: str
 def get_matchup(week: int | None = None) -> dict:
     """My head-to-head matchup: both teams' points and Yahoo projections, plus the opponent's roster.
 
-    week: NFL week; omit for the current week.
+    week: NFL week; omit for the current week. If Yahoo is unreachable, returns Dan's copy of
+    his Yahoo matchup page (config/manual_matchup.json, source="manual") when it's for that week.
     """
     try:
         return client().matchup(week)
     except (ConfigError, AuthError, YahooAccessError) as exc:
-        return _error(exc)
+        if week is None:
+            try:
+                week = nflverse.current_week(nflverse.games())
+            except DataSourceError:
+                pass  # fall back to the copy's age alone
+        saved = manual_matchup(week)
+        if saved is None:
+            return {"error": f"{exc} No copy of this week's matchup page either."}
+        return {**saved, "yahoo_error": str(exc)}
 
 
 @mcp.tool(annotations=READ_ONLY)

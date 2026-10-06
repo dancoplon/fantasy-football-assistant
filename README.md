@@ -50,6 +50,18 @@ Tokens are saved to `secrets/yahoo_token.json` (owner-only permissions, gitignor
 
 If Yahoo can't be reached (no token yet, or API access not provisioned), `get_my_roster` falls back to `config/manual_roster.json` and says so (`"source": "manual"`). Keep that file current by hand until Yahoo access works. Likewise `get_free_agents` falls back to `config/manual_free_agents.json`, a saved copy of Yahoo's available-players page, for 7 days after its `as_of` time. That file holds league data, so it stays on the Mac (gitignored); `config/manual_free_agents.example.json` shows its shape.
 
+### Until Yahoo access works
+
+Booth works from copies of Dan's Yahoo pages. He sends screenshots (or saved PDFs) in the project thread, and a Claude session on the Mac turns them into JSON. These files hold league data, so they are gitignored; `config/*.example.json` show the shape.
+
+| File | From | Used |
+| --- | --- | --- |
+| `config/manual_roster.local.json` | his team page (optional `slot`: where he has each player, `BN` = bench) | instead of the seeded `config/manual_roster.json`; flagged as possibly stale after 7 days |
+| `config/manual_free_agents.json` | the available-players page | for 7 days after `as_of` |
+| `config/manual_matchup.json` | his matchup page | only for its `week`, and not after 8 days |
+
+After writing any of them, run `uv run booth manual-status`: it lists what each file holds, how old it is, whether Booth will use it, and any problems (exit code 1 if there are problems).
+
 ## External data and league context
 
 The same MCP server also exposes free public data, none of which needs Yahoo:
