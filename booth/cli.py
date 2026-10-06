@@ -7,7 +7,7 @@
   uv run booth report thu --send   ...and deliver it
   uv run booth run due      what launchd runs: build and send whichever report is due
   uv run booth send-test    send a short test message (Telegram once set up, else iMessage)
-  uv run booth telegram-setup   connect the Booth bot after saying "hi" to it in Telegram
+  uv run booth telegram-setup   connect the Booth bot: prints a link to open in Telegram, then run it again
   uv run booth schedule install|uninstall|status|wake|test-send
 """
 
@@ -166,7 +166,7 @@ def cmd_send_test(args: argparse.Namespace) -> int:
     from booth.deliver import DeliveryError, send
 
     try:
-        ch = send("Booth test: if you can read this, report delivery works.")
+        ch = send("Booth test: if you can read this, report delivery works.", via=args.via)
     except DeliveryError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
@@ -178,11 +178,12 @@ def cmd_telegram_setup(args: argparse.Namespace) -> int:
     from booth.deliver import DeliveryError, telegram_setup
 
     try:
-        print(telegram_setup())
+        connected, text = telegram_setup(replace=args.replace)
     except DeliveryError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
-    return 0
+    print(text)
+    return 0 if connected else 2
 
 
 def cmd_schedule(args: argparse.Namespace) -> int:
@@ -190,7 +191,7 @@ def cmd_schedule(args: argparse.Namespace) -> int:
 
     action = {"install": schedule.install, "uninstall": schedule.uninstall,
               "status": schedule.status, "wake": schedule.install_wake,
-              "test-send": schedule.test_send}[args.action]
+              "test-send": lambda: schedule.test_send(via=args.via)}[args.action]
     try:
         print(action())
     except (RuntimeError, FileNotFoundError) as exc:
@@ -220,11 +221,15 @@ def main(argv: list[str] | None = None) -> int:
     p_run = sub.add_parser("run", help="scheduled entrypoint")
     p_run.add_argument("what", choices=["due"])
     p_run.set_defaults(func=cmd_run)
-    sub.add_parser("send-test", help="send a test message").set_defaults(func=cmd_send_test)
-    sub.add_parser("telegram-setup", help="connect your Booth bot after saying hi to it in Telegram").set_defaults(
-        func=cmd_telegram_setup)
+    p_test = sub.add_parser("send-test", help="send a test message")
+    p_test.add_argument("--via", choices=["telegram", "imessage"], help="test this channel (default: the one in use)")
+    p_test.set_defaults(func=cmd_send_test)
+    p_tg = sub.add_parser("telegram-setup", help="connect your Booth bot to your Telegram chat")
+    p_tg.add_argument("--replace", action="store_true", help="connect a different chat than the saved one")
+    p_tg.set_defaults(func=cmd_telegram_setup)
     p_sch = sub.add_parser("schedule", help="manage the launchd job (macOS)")
     p_sch.add_argument("action", choices=["install", "uninstall", "status", "wake", "test-send"])
+    p_sch.add_argument("--via", choices=["telegram", "imessage"], help="test-send: test this channel")
     p_sch.set_defaults(func=cmd_schedule)
     args = parser.parse_args(argv)
     try:
