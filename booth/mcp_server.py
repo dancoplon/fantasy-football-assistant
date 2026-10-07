@@ -156,7 +156,13 @@ def get_team_rosters(team: str | None = None) -> list[dict] | dict:
     byes = _bye_table()
     for t in teams:
         _add_teams_and_byes(t.get("players"), byes)
+        # A full league is ~12 x 27 players, so keep only what trade talk needs.
+        t["players"] = [{k: v for k, v in p.items() if k in ROSTER_KEYS and v not in (None, "", [])}
+                        for p in t.get("players", [])]
     return teams
+
+
+ROSTER_KEYS = ("name", "eligible_positions", "nfl_team", "bye_week", "slot", "status")
 
 
 @mcp.tool(annotations=READ_ONLY)
