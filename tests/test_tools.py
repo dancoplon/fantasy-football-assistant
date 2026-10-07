@@ -552,5 +552,6 @@ def test_team_rosters_tool_adds_byes(monkeypatch):
     monkeypatch.setattr(nflverse, "games", lambda: calls.append(1) or [{"week": "5", "home_team": "CIN", "away_team": "BUF"},
                                                                        {"week": "6", "home_team": "MIA", "away_team": "BUF"}])
     out = mcp_server.get_team_rosters()
+    assert out[0]["players"][0] == {"name": "X", "nfl_team": "CIN", "bye_week": 6}
     assert out[0]["players"][0]["bye_week"] == 6 and out[1]["players"][0]["bye_week"] == 5
     assert len(calls) == 1
