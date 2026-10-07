@@ -10,7 +10,7 @@ are gitignored; config/*.example.json show their shape.
 - config/manual_matchup.json: this week's matchup page. Used only for its own week.
 - config/faab_market.json: what this league pays on waivers (winning bids, each team's
   budget left), from his league home page. Kept as a running log: old prices stay useful,
-  and budgets are flagged as stale after 8 days. Unlike the others, it stays useful after
+  and budgets are flagged as stale once a Wednesday claims run has passed since the copy. Unlike the others, it stays useful after
   Yahoo access works, since Yahoo's transaction list only covers recent moves.
 
 `booth manual-status` checks all four.
@@ -34,7 +34,7 @@ FAAB_MARKET = CONFIG / "faab_market.json"
 FREE_AGENTS_MAX_AGE = timedelta(days=7)
 ROSTER_STALE_AFTER = timedelta(days=7)
 MATCHUP_MAX_AGE = timedelta(days=8)
-BUDGETS_STALE_AFTER = timedelta(days=8)  # waivers run weekly, so budgets older than that have moved
+CLAIMS_RUN_ET = (2, 3, 40)  # Wednesday 3:40 AM ET: when claims process and budgets change (seen Oct 7 2026)
 RECENT_CLAIM_WEEKS = 3  # weeks of winning bids listed one by one; older ones only count in the totals
 FLEX = {"RB", "WR", "TE"}
 POSITIONS = {"QB", "RB", "WR", "TE", "K", "DEF"}
@@ -132,42 +132,84 @@ def _median(values: list[float]) -> float:
     return v[mid] if len(v) % 2 else (v[mid - 1] + v[mid]) / 2
 
 
+def last_claims_run(now: datetime) -> datetime:
+    """The most recent Wednesday claims run at or before `now`."""
+    from zoneinfo import ZoneInfo
+
+    weekday, hour, minute = CLAIMS_RUN_ET
+    local = now.astimezone(ZoneInfo("America/New_York"))
+    run = local.replace(hour=hour, minute=minute, second=0, microsecond=0) - timedelta(
+        days=(local.weekday() - weekday) % 7)
+    return run if run <= local else run - timedelta(days=7)
+
+
+def _budgets_stale(as_of: datetime, now: datetime) -> bool:
+    return as_of < last_claims_run(now)
+
+
+def _number(value) -> bool:
+    return isinstance(value, (int, float)) and not isinstance(value, bool)
+
+
+def _week(value) -> int | None:
+    try:
+        week = int(value)
+    except (TypeError, ValueError):
+        return None
+    return week if 1 <= week <= 18 else None
+
+
 def faab_market(now: datetime | None = None) -> dict | None:
     """What this league pays on waivers, from Dan's copies of his league page: each team's
-    budget left, recent winning bids, and price ranges by position. None if there's no
-    usable copy."""
+    budget left, recent winning bids, and price ranges by position. A bad entry is skipped
+    (and counted in "warning"), not the whole file. None if there's no usable copy."""
     if not FAAB_MARKET.exists():
         return None
     try:
         data = json.loads(FAAB_MARKET.read_text())
-        start = data.get("starting_budget", 100)
-        teams = [{**t, "spent": start - t["remaining"]} for t in data["teams"]]
-        claims = [c for c in data.get("claims") or [] if isinstance(c.get("bid"), (int, float))]
-        weeks = sorted({int(c["week"]) for c in claims}, reverse=True)[:RECENT_CLAIM_WEEKS]
-        by_position: dict[str, dict] = {}
-        for pos in sorted({c.get("position") for c in claims if c.get("position")}):
-            bids = [c["bid"] for c in claims if c.get("position") == pos]
-            by_position[pos] = {"claims": len(bids), "top": max(bids), "median": _median(bids)}
-        out = {
-            "source": "manual",
-            "as_of": data["as_of"],
-            "note": data.get("note", ""),
-            "starting_budget": start,
-            "dan_remaining": next((t["remaining"] for t in teams if t.get("is_me")), None),
-            "league_spent": sum(t["spent"] for t in teams),
-            "teams_that_never_bid": sum(1 for t in teams if t["spent"] == 0),
-            "teams": sorted(teams, key=lambda t: t["remaining"]),
-            "recent_claims": sorted((c for c in claims if int(c["week"]) in weeks),
-                                    key=lambda c: (-int(c["week"]), -c["bid"])),
-            "by_position": by_position,
-            "dan_outbid": [c for c in claims if c.get("outbid_dan")],
-        }
-        if (now or datetime.now(timezone.utc)) - _as_of(str(data["as_of"])) > BUDGETS_STALE_AFTER:
-            out["warning"] = (f"Budgets are from {data['as_of']}; teams have bid since. "
-                              "Winning bids still show the going rate.")
-        return out
-    except (OSError, ValueError, KeyError, TypeError, AttributeError):  # unreadable: same as no copy
+        if not isinstance(data, dict):
+            return None
+        start = data.get("starting_budget") if _number(data.get("starting_budget")) else 100
+        raw_teams = [t for t in data.get("teams") or [] if isinstance(t, dict)]
+        teams = [{**t, "spent": start - t["remaining"]} for t in raw_teams if _number(t.get("remaining"))]
+        raw_claims = [c for c in data.get("claims") or [] if isinstance(c, dict)]
+        claims = [{**c, "week": _week(c.get("week"))} for c in raw_claims
+                  if _number(c.get("bid")) and _week(c.get("week"))]
+    except (OSError, ValueError, TypeError):  # unreadable: same as no copy
         return None
+    if not teams and not claims:
+        return None
+    weeks = sorted({c["week"] for c in claims}, reverse=True)[:RECENT_CLAIM_WEEKS]
+    by_position: dict[str, dict] = {}
+    for pos in sorted({str(c["position"]) for c in claims if c.get("position")}):
+        bids = [c["bid"] for c in claims if c.get("position") == pos]
+        by_position[pos] = {"claims": len(bids), "top": max(bids), "median": _median(bids)}
+    out = {
+        "source": "manual",
+        "as_of": data.get("as_of"),
+        "note": data.get("note", ""),
+        "starting_budget": start,
+        "dan_remaining": next((t["remaining"] for t in teams if t.get("is_me")), None),
+        "league_spent": sum(t["spent"] for t in teams),
+        "teams_with_nothing_spent": sum(1 for t in teams if t["spent"] == 0),
+        "teams": sorted(teams, key=lambda t: t["remaining"]),
+        "recent_claims": sorted((c for c in claims if c["week"] in weeks), key=lambda c: (-c["week"], -c["bid"])),
+        "by_position": by_position,
+        "dan_outbid": [c for c in claims if c.get("outbid_dan")],
+    }
+    warnings = []
+    skipped = len(raw_teams) - len(teams) + len(raw_claims) - len(claims)
+    if skipped:
+        warnings.append(f"{skipped} entries couldn't be read and were left out; run booth manual-status.")
+    try:
+        if _budgets_stale(_as_of(str(data["as_of"])), now or datetime.now(timezone.utc)):
+            warnings.append(f"Budgets are from {data['as_of']}, before the latest Wednesday claims run, so "
+                            "teams have bid since. Winning bids still show the going rate.")
+    except (KeyError, ValueError):
+        warnings.append("This copy has no readable as_of date, so the budgets may be out of date.")
+    if warnings:
+        out["warning"] = " ".join(warnings)
+    return out
 
 
 # --- Checks, for whoever writes these files ---------------------------------------------
@@ -238,7 +280,7 @@ def check_faab_market(data: dict) -> list[str]:
     problems: list[str] = []
     _check_as_of(data, problems)
     start = data.get("starting_budget", 100)
-    if not isinstance(start, (int, float)):
+    if not _number(start):
         problems.append('"starting_budget" must be a number')
         start = 100
     teams = data.get("teams")
@@ -246,14 +288,23 @@ def check_faab_market(data: dict) -> list[str]:
         problems.append('"teams" must be a non-empty list')
     else:
         for i, t in enumerate(teams):
+            if not isinstance(t, dict):
+                problems.append(f"team {i + 1}: not an object")
+                continue
             where = f"team {i + 1} ({t.get('team', '?')})"
             if not t.get("team"):
                 problems.append(f'{where}: missing "team"')
-            if not isinstance(t.get("remaining"), (int, float)) or not 0 <= t["remaining"] <= start:
+            if not _number(t.get("remaining")) or not 0 <= t["remaining"] <= start:
                 problems.append(f'{where}: "remaining" must be a number from 0 to {start}')
-        if sum(1 for t in teams if t.get("is_me")) != 1:
+        if sum(1 for t in teams if isinstance(t, dict) and t.get("is_me")) != 1:
             problems.append('mark exactly one team as Dan\'s ("is_me": true)')
-    for i, c in enumerate(data.get("claims") or []):
+    claims = data.get("claims") or []
+    if not isinstance(claims, list):
+        return problems + ['"claims" must be a list']
+    for i, c in enumerate(claims):
+        if not isinstance(c, dict):
+            problems.append(f"claim {i + 1}: not an object")
+            continue
         where = f"claim {i + 1} ({c.get('player', '?')})"
         for key in ("player", "position", "team"):
             if not c.get(key):
@@ -262,7 +313,7 @@ def check_faab_market(data: dict) -> list[str]:
             problems.append(f'{where}: position "{c["position"]}" is not one of {sorted(POSITIONS)}')
         if not isinstance(c.get("week"), int) or not 1 <= c["week"] <= 18:
             problems.append(f'{where}: "week" must be a whole number from 1 to 18')
-        if not isinstance(c.get("bid"), (int, float)) or c["bid"] < 0:
+        if not _number(c.get("bid")) or c["bid"] < 0:
             problems.append(f'{where}: "bid" must be a dollar amount')
     return problems
 
@@ -334,15 +385,21 @@ def status(now: datetime | None = None, current_week: int | None = None) -> str:
         lines.append(f"FAAB market: {err}. Bids won't be checked against what this league pays.")
         if err != "not there":
             lines.append(f"  problem: {FAAB_MARKET.name} can't be read. Fix or rewrite it.")
+    elif not isinstance(data, dict):
+        lines.append("FAAB market: not a JSON object. Not used by reports.")
+        lines.append(f"  problem: {FAAB_MARKET.name} must be a JSON object. Fix or rewrite it.")
     else:
         problems = check_faab_market(data)
         as_of = _check_as_of(data, [])
-        weeks = sorted({c.get("week") for c in data.get("claims") or [] if isinstance(c.get("week"), int)})
-        span = f" (weeks {weeks[0]}-{weeks[-1]})" if len(weeks) > 1 else f" (week {weeks[0]})" if weeks else ""
-        stale = (" Budgets STALE: send a fresh league page."
-                 if as_of and now - as_of > BUDGETS_STALE_AFTER else "")
-        lines.append(f"FAAB market: {len(data.get('claims') or [])} winning bids{span}, "
-                     f"{len(data.get('teams') or [])} team budgets as of {data.get('as_of')}"
-                     f" ({age(as_of) if as_of else '?'}).{stale}")
+        market = faab_market(now)
+        if market is None:
+            lines.append("FAAB market: nothing usable in it. Not used by reports until fixed.")
+        else:
+            weeks = sorted({c["week"] for c in market["recent_claims"]})
+            span = f" (latest week {weeks[-1]})" if weeks else ""
+            stale = " Budgets STALE: send a fresh league page." if as_of and _budgets_stale(as_of, now) else ""
+            lines.append(f"FAAB market: {sum(p['claims'] for p in market['by_position'].values())} winning bids"
+                         f"{span}, {len(market['teams'])} team budgets as of {data.get('as_of')}"
+                         f" ({age(as_of) if as_of else '?'}).{stale}")
         lines += [f"  problem: {p}" for p in problems]
     return "\n".join(lines)

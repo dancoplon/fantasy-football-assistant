@@ -60,7 +60,7 @@ Booth works from copies of Dan's Yahoo pages. He sends screenshots (or saved PDF
 | `config/manual_roster.local.json` | his team page (optional `slot`: where he has each player, `BN` = bench) | instead of the seeded `config/manual_roster.json`; flagged as possibly stale after 7 days |
 | `config/manual_free_agents.json` | the available-players page | for 7 days after `as_of` |
 | `config/manual_matchup.json` | his matchup page | only for its `week`, and not after 8 days |
-| `config/faab_market.json` | his league home page: each team's waiver budget (standings) and winning bids (recent transactions) | always, as a running log of what this league pays; Tuesday bids are priced from it. Budgets are flagged after 8 days. Add each week's winning bids and keep the old ones: it stays useful after Yahoo works, since Yahoo only lists recent moves |
+| `config/faab_market.json` | his league home page: each team's waiver budget (standings) and winning bids (recent transactions) | always, as a running log of what this league pays; Tuesday bids are priced from it. Budgets are flagged once a Wednesday claims run has passed since the copy. Add each week's winning bids and keep the old ones: it stays useful after Yahoo works, since Yahoo only lists recent moves |
 
 After writing any of them, run `uv run booth manual-status`: it lists what each file holds, how old it is, whether Booth will use it, and any problems (exit code 1 if there are problems).
 

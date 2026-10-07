@@ -2,7 +2,6 @@
   "_note": "Seed only; do not edit (this repo is public). Used when the Yahoo API is unreachable and there is no config/manual_roster.local.json (gitignored), which holds Dan's current roster and is read first.",
   "as_of": "2026-10-05",
   "team_name": "Mayor of Titty City",
-  "faab_remaining": 100,
   "ir_slots_used": 0,
   "ir_slots_total": 3,
   "players": [
