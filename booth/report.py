@@ -175,6 +175,11 @@ def parse_stream(stdout: str, returncode: int = 0, stderr: str = "") -> dict:
     return result
 
 
+# A few runs a week, each making real lineup and waiver calls: worth more thinking than Claude
+# Code's default (medium for Opus 5.5). Dan chose high on Oct 7 2026.
+DEFAULT_EFFORT = "high"
+
+
 def run_claude(prompt: str, timeout: int = 900, schema: dict | None = None) -> dict:
     """Run `claude -p` with Booth's MCP server and return its result (with structured_output)."""
     cmd = [
@@ -191,6 +196,9 @@ def run_claude(prompt: str, timeout: int = 900, schema: dict | None = None) -> d
     ]
     if os.getenv("BOOTH_MODEL"):
         cmd += ["--model", os.environ["BOOTH_MODEL"]]
+    effort = os.getenv("BOOTH_EFFORT", DEFAULT_EFFORT).strip()
+    if effort and effort != "default":  # "default" leaves it to Claude Code
+        cmd += ["--effort", effort]
     try:
         proc = subprocess.run(cmd, cwd=ROOT, stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=timeout)
     except FileNotFoundError as exc:

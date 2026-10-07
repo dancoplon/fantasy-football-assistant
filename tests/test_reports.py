@@ -1,4 +1,5 @@
 import json
+import subprocess
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -363,3 +364,24 @@ def test_one_block_or_old_message_falls_back_to_space_sections():
     assert report.message_text({"message_blocks": [raw]}) == report.space_sections(raw)
     assert report.message_text({"message": raw}) == report.space_sections(raw)
     assert report.message_text({"message_blocks": []}) == ""
+
+
+@pytest.mark.parametrize("env,expected", [(None, ["--effort", "high"]), ("max", ["--effort", "max"]), ("default", [])])
+def test_run_claude_sets_effort(monkeypatch, env, expected):
+    from booth import report
+    seen = {}
+
+    def fake_run(cmd, **kwargs):
+        seen["cmd"] = cmd
+        raise subprocess.TimeoutExpired(cmd, 1)
+
+    monkeypatch.setattr(report.subprocess, "run", fake_run)
+    if env is None:
+        monkeypatch.delenv("BOOTH_EFFORT", raising=False)
+    else:
+        monkeypatch.setenv("BOOTH_EFFORT", env)
+    with pytest.raises(report.ReportError):
+        report.run_claude("hi")
+    cmd = seen["cmd"]
+    got = cmd[cmd.index("--effort"):cmd.index("--effort") + 2] if "--effort" in cmd else []
+    assert got == expected

@@ -85,7 +85,7 @@ Downloads are cached in `state/cache/`; if a source is down, the last good copy 
 - for Saturday and Sunday, diffs against the previous run's snapshot (Thursday, then Saturday) and opens the message with "Changes since last report: ..." or "No changes. Lineup stands." Only structured fields count, so reworded reasoning never triggers a change,
 - writes the final text to `reports/2026-wkNN-<run>.txt`.
 
-Set `BOOTH_MODEL` to pick a model; the default is Claude Code's.
+Set `BOOTH_MODEL` to pick a model; the default is Claude Code's. Runs use `--effort high`; set `BOOTH_EFFORT` to `low`, `medium`, `xhigh` or `max` to change it, or to `default` to leave it to Claude Code.
 
 ## Schedule and delivery (macOS)
 
