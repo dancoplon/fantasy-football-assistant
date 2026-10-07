@@ -111,6 +111,11 @@ def _total(points) -> float | None:
     return None
 
 
+def _plain(text: str) -> str:
+    """Lowercase letters and digits only, so "MC⚡️DC" matches "mc dc" and "mcdc"."""
+    return "".join(c for c in text.lower() if c.isascii() and c.isalnum())
+
+
 def _dollars(value) -> int | None:
     try:
         return int(float(value))
@@ -185,7 +190,7 @@ def summarize_transaction(txn: dict, tz=None) -> dict:
     }
 
 
-# --- The six read-only calls behind the MCP tools ----------------------------
+# --- The read-only calls behind the MCP tools ----------------------------
 
 # Ranking windows Yahoo accepts for football free agents (checked live Oct 7 2026;
 # "lastweek" is refused with "Invalid sort_type for this game provided.").
@@ -300,6 +305,44 @@ class YahooClient:
                     result["opponent_roster"] = self._call(opp_team.roster, week=wk)
                 return result
         raise YahooAccessError(f"No matchup found for team {self.team_key} in week {week or 'current'}.")
+
+    def team_rosters(self, team: str | None = None) -> list[dict]:
+        """Rosters for every team in the league, or the teams whose name matches `team`.
+
+        team: part of a team name (case, spaces and emoji ignored) or a team_key.
+        """
+        info = self.team_info()
+        if not info:
+            raise YahooAccessError("Yahoo didn't return the league's teams.")
+        keys = list(info)
+        if team:
+            want = _plain(team)
+            keys = [k for k in keys if k == team or want in _plain(info[k].get("name", ""))]
+            if not keys:
+                names = ", ".join(str(t.get("name")) for t in info.values())
+                raise YahooAccessError(f"No team matches {team!r}. Teams: {names}")
+        try:
+            standing = {r.get("team_key"): r for r in self._call(self.league.standings)}
+        except YahooAccessError:
+            standing = {}
+        out = []
+        for key in keys:
+            players = self._call(self.league.to_team(key).roster)
+            for p in players:
+                p["slot"] = p.get("selected_position")
+            row = {"team_key": key, "team_name": info[key].get("name"), "is_me": key == self.team_key,
+                   "players": players}
+            faab = _dollars(info[key].get("faab_balance"))
+            if faab is not None:
+                row["faab_remaining"] = faab
+            st = standing.get(key) or {}
+            if st.get("rank") not in (None, ""):
+                row["rank"] = st["rank"]
+            if isinstance(st.get("outcome_totals"), dict):
+                o = st["outcome_totals"]
+                row["record"] = f"{o.get('wins')}-{o.get('losses')}" + (f"-{o['ties']}" if str(o.get("ties", "0")) not in ("0", "") else "")
+            out.append(row)
+        return out
 
     def transactions(self, types: str = "add,drop,trade", count: int = 25) -> list[dict]:
         txns = self._call(self.league.transactions, types, str(count))
