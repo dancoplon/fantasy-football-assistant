@@ -40,7 +40,7 @@
     "waiver_period_days": 2,
     "acquisition_limits": null,
     "injured_players_direct_to_ir": false,
-    "claim_processing_time_et": "UNVERIFIED: read from past claims once Yahoo access works (booth check)"
+    "claim_processing_time_et": "Wednesday about 3:40 AM (Week 5 claims processed Wed Oct 7 2026, 12:41 AM PT)"
   },
   "trade_deadline": "2026-11-28",
   "draft_pick_trades": true,
@@ -48,7 +48,7 @@
   "my_team": {
     "name": "Mayor of Titty City",
     "short": "MOTC",
-    "faab_budget_remaining": 100,
+    "faab_budget_start": 100,
     "record_entering_week_4": "1-2"
   }
 }

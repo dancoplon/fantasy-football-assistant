@@ -326,3 +326,120 @@ def test_manual_status_fails_on_a_broken_copy(monkeypatch, tmp_path, capsys, whi
     monkeypatch.setattr(mcp_server.nflverse, "current_week", lambda games: 5)
     assert cli.main(["manual-status"]) == 1
     assert "problem:" in capsys.readouterr().out
+
+
+def test_faab_market_summarizes_the_example(monkeypatch):
+    from datetime import datetime, timezone
+    from booth import manual
+    monkeypatch.setattr(manual, "FAAB_MARKET", manual.CONFIG / "faab_market.example.json")
+    m = manual.faab_market(now=datetime(2026, 10, 1, 12, tzinfo=timezone.utc))  # before the Wed claims run
+    assert m["source"] == "manual" and m["dan_remaining"] == 72 and "warning" not in m
+    assert m["league_spent"] == 90 and m["teams_with_nothing_spent"] == 1
+    assert [t["team"] for t in m["teams"]] == ["Example Spender", "My Team", "Example Saver"]
+    assert m["teams"][0]["spent"] == 62
+    assert [c["bid"] for c in m["recent_claims"]] == [22, 9, 3]
+    assert m["by_position"]["QB"] == {"claims": 1, "top": 9, "median": 9}
+    assert [c["player"] for c in m["dan_outbid"]] == ["Example Quarterback"]
+    assert "_note" not in m
+    assert manual.check_faab_market(json.loads((manual.CONFIG / "faab_market.example.json").read_text())) == []
+
+
+def test_faab_market_keeps_old_prices_and_flags_budgets_after_a_claims_run(monkeypatch, tmp_path):
+    from datetime import datetime, timezone
+    from booth import manual
+    claims = [{"week": w, "player": f"P{w}{i}", "position": "WR", "nfl_team": "X", "bid": b, "team": "T"}
+              for w, bids in ((1, [30]), (2, [2, 4]), (3, [6]), (4, [8]), (5, [10, 1])) for i, b in enumerate(bids)]
+    data = {"as_of": "2026-10-06T12:00:00-04:00", "starting_budget": 100,  # Tuesday, before that week's run
+            "teams": [{"team": "Me", "remaining": 95, "is_me": True}], "claims": claims}
+    monkeypatch.setattr(manual, "FAAB_MARKET", _write(tmp_path / "f.json", data))
+    m = manual.faab_market(now=datetime(2026, 10, 7, 7, 30, tzinfo=timezone.utc))  # Wed 3:30 AM ET
+    assert {c["week"] for c in m["recent_claims"]} == {3, 4, 5}  # the last 3 weeks one by one
+    assert m["by_position"]["WR"] == {"claims": 7, "top": 30, "median": 6}  # but every week in the ranges
+    assert "warning" not in m
+    m = manual.faab_market(now=datetime(2026, 10, 7, 7, 45, tzinfo=timezone.utc))  # Wed 3:45 AM ET
+    assert "before the latest Wednesday claims run" in m["warning"]
+
+
+def test_last_claims_run():
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+    from booth import manual
+    et = ZoneInfo("America/New_York")
+    assert manual.last_claims_run(datetime(2026, 10, 13, 8, tzinfo=et)) == datetime(2026, 10, 7, 3, 40, tzinfo=et)
+    assert manual.last_claims_run(datetime(2026, 10, 7, 3, 40, tzinfo=et)) == datetime(2026, 10, 7, 3, 40, tzinfo=et)
+    assert manual.last_claims_run(datetime(2026, 10, 7, 3, 39, tzinfo=et)) == datetime(2026, 9, 30, 3, 40, tzinfo=et)
+
+
+@pytest.mark.parametrize("bad", [
+    {"claims": [{"player": "P", "position": "WR", "bid": 11, "team": "T"}]},  # no week
+    {"claims": [{"week": "Week 5", "player": "P", "position": "WR", "bid": 11, "team": "T"}]},
+    {"teams": [{"team": "Me", "remaining": "$95", "is_me": True}]},
+    {"teams": [{"team": "Me", "remaining": None, "is_me": True}]},
+    {"starting_budget": "100"},
+    {"as_of": "Oct 7"},
+    {"claims": ["not a claim"]},
+])
+def test_one_bad_entry_doesnt_lose_the_market(monkeypatch, tmp_path, bad):
+    from booth import manual
+    good = json.loads((manual.CONFIG / "faab_market.example.json").read_text())
+    data = {**good, **{k: v + good[k] if isinstance(v, list) else v for k, v in bad.items()}}
+    monkeypatch.setattr(manual, "FAAB_MARKET", _write(tmp_path / "f.json", data))
+    m = manual.faab_market()
+    assert m is not None and m["by_position"]["RB"]["top"] == 22
+    assert "problem:" in manual.status(current_week=5)
+
+
+def test_faab_market_missing_or_unreadable(monkeypatch, tmp_path):
+    from booth import manual
+    assert manual.faab_market() is None  # conftest points it at an empty folder
+    assert "No copy" in mcp_server.get_league_context()["faab_market"]["note"]
+    bad = tmp_path / "f.json"
+    bad.write_text('{"as_of": "2026-10-07", "teams": [')
+    monkeypatch.setattr(manual, "FAAB_MARKET", bad)
+    assert manual.faab_market() is None
+    assert "couldn't be read" in mcp_server.get_league_context()["faab_market"]["note"]
+    for junk in ({"as_of": "2026-10-07"}, [], {"teams": "x", "claims": {"a": 1}}):
+        monkeypatch.setattr(manual, "FAAB_MARKET", _write(tmp_path / "g.json", junk))
+        assert manual.faab_market() is None
+        manual.status(current_week=5)  # never crashes
+
+
+def test_faab_market_check_catches_bad_copies():
+    from booth import manual
+    probs = manual.check_faab_market({
+        "as_of": "2026-10-07", "starting_budget": 100,
+        "teams": [{"team": "A", "remaining": 120}, {"remaining": 50}, "x"],
+        "claims": [{"week": 0, "player": "P", "position": "WR", "team": "A", "bid": "13"},
+                   {"week": 5, "player": "Q", "position": "FB", "bid": 3}]})
+    assert probs == [
+        'team 1 (A): "remaining" must be a number from 0 to 100',
+        'team 2 (?): missing "team"',
+        "team 3: not an object",
+        'mark exactly one team as Dan\'s ("is_me": true)',
+        'claim 1 (P): "week" must be a whole number from 1 to 18',
+        'claim 1 (P): "bid" must be a dollar amount',
+        'claim 2 (Q): missing "team"',
+        'claim 2 (Q): position "FB" is not one of [\'DEF\', \'K\', \'QB\', \'RB\', \'TE\', \'WR\']',
+    ]
+    assert manual.check_faab_market({"as_of": "2026-10-07"}) == ['"teams" must be a non-empty list']
+
+
+def test_manual_status_reports_the_faab_market(monkeypatch, tmp_path):
+    from datetime import datetime, timezone
+    from booth import manual
+    assert "FAAB market: not there." in manual.status(current_week=5)
+    monkeypatch.setattr(manual, "FAAB_MARKET", manual.CONFIG / "faab_market.example.json")
+    text = manual.status(now=datetime(2026, 10, 1, 12, tzinfo=timezone.utc), current_week=4)
+    assert "FAAB market: 3 winning bids (latest week 4), 3 team budgets as of 2026-09-30T09:00:00-04:00" in text
+    assert "STALE" not in text.split("FAAB market")[1]
+    text = manual.status(now=datetime(2026, 10, 8, 16, tzinfo=timezone.utc), current_week=5)
+    assert "Budgets STALE: send a fresh league page." in text
+    monkeypatch.setattr(manual, "FAAB_MARKET", _write(tmp_path / "f.json", {"as_of": "2026-10-07", "teams": []}))
+    text = manual.status(current_week=5)
+    assert "Not used by reports until fixed." in text and '  problem: "teams" must be a non-empty list' in text
+
+
+def test_league_context_includes_the_faab_market(monkeypatch):
+    from booth import manual
+    monkeypatch.setattr(manual, "FAAB_MARKET", manual.CONFIG / "faab_market.example.json")
+    assert mcp_server.get_league_context()["faab_market"]["dan_remaining"] == 72

@@ -1,0 +1,51 @@
+{
+  "_note": "Example of config/faab_market.json (gitignored): what Dan's league pays on waivers, copied from his Yahoo league home page (standings show each team's waiver budget; recent transactions show winning bids). Made-up teams, numbers and claims. Add each week's winning bids to \"claims\" and refresh \"teams\"; keep older claims.",
+  "as_of": "2026-09-30T09:00:00-04:00",
+  "note": "Budgets from the standings table; claims from Recent Transactions (the 5 newest only, so a week's list may be incomplete).",
+  "starting_budget": 100,
+  "teams": [
+    {
+      "team": "My Team",
+      "remaining": 72,
+      "waiver_priority": 5,
+      "is_me": true
+    },
+    {
+      "team": "Example Spender",
+      "remaining": 38,
+      "waiver_priority": 9
+    },
+    {
+      "team": "Example Saver",
+      "remaining": 100,
+      "waiver_priority": 1
+    }
+  ],
+  "claims": [
+    {
+      "week": 4,
+      "player": "Example Running Back",
+      "position": "RB",
+      "nfl_team": "DAL",
+      "bid": 22,
+      "team": "Example Spender"
+    },
+    {
+      "week": 4,
+      "player": "Example Quarterback",
+      "position": "QB",
+      "nfl_team": "NYG",
+      "bid": 9,
+      "team": "Example Spender",
+      "outbid_dan": true
+    },
+    {
+      "week": 4,
+      "player": "Example Tight End",
+      "position": "TE",
+      "nfl_team": "SEA",
+      "bid": 3,
+      "team": "My Team"
+    }
+  ]
+}

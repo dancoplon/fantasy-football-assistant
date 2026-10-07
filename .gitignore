@@ -21,6 +21,7 @@ reports/
 config/manual_free_agents.json
 config/manual_matchup.json
 config/manual_roster.local.json
+config/faab_market.json
 
 # --- Python ----------------------------------------------------------------------
 __pycache__/

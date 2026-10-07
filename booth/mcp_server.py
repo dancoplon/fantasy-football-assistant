@@ -13,7 +13,7 @@ from booth.config import ConfigError, Settings
 from booth.context import league_config, strategy_text
 from booth.data import nflverse, sleeper, weather
 from booth.data.cache import DataSourceError
-from booth.manual import manual_free_agents, manual_matchup, manual_roster
+from booth.manual import faab_market, manual_free_agents, manual_matchup, manual_roster
 from booth.yahoo import YahooAccessError, YahooClient
 
 mcp = MCPServer("yahoo-fantasy")
@@ -125,8 +125,16 @@ def get_standings() -> list[dict] | dict:
 
 @mcp.tool(annotations=READ_ONLY)
 def get_league_context() -> dict:
-    """League rules (scoring, roster slots, waivers, deadlines) and Dan's strategy notes. Read this first on every run."""
-    return {"league": league_config(), "strategy": strategy_text()}
+    """League rules (scoring, roster slots, waivers, deadlines), Dan's strategy notes, and what this
+    league pays on waivers ("faab_market": each team's budget left, recent winning bids, price
+    ranges by position, claims Dan lost). Read this first on every run."""
+    from booth import manual
+
+    market = faab_market() or {"note": (
+        "config/faab_market.json is there but couldn't be read, so bids can't be checked against this "
+        "league's prices; Dan should ask for it to be fixed (booth manual-status)." if manual.FAAB_MARKET.exists()
+        else "No copy of the league's FAAB history yet (config/faab_market.json).")}
+    return {"league": league_config(), "strategy": strategy_text(), "faab_market": market}
 
 
 @mcp.tool(annotations=READ_ONLY)
