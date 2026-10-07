@@ -62,6 +62,32 @@ def _implied_totals(g: dict) -> tuple[float | None, float | None]:
     return home, round(total - home, 1)
 
 
+# Yahoo writes some team codes differently from nflverse (and in mixed case, e.g. "Cin").
+YAHOO_TEAM_CODES = {"LAR": "LA", "JAC": "JAX", "WSH": "WAS"}
+
+
+def team_code(abbr: str | None) -> str | None:
+    """nflverse's code for a Yahoo editorial_team_abbr (e.g. "Cin" -> "CIN", "LAR" -> "LA")."""
+    if not abbr:
+        return None
+    code = abbr.strip().upper()
+    return YAHOO_TEAM_CODES.get(code, code)
+
+
+def bye_weeks(all_games: list[dict]) -> dict[str, int]:
+    """Each team's bye week: the regular-season week it has no game."""
+    weeks = sorted({int(g["week"]) for g in all_games})
+    playing: dict[int, set[str]] = {}
+    for g in all_games:
+        playing.setdefault(int(g["week"]), set()).update((g["home_team"], g["away_team"]))
+    teams = set().union(*playing.values()) if playing else set()
+    byes: dict[str, int] = {}
+    for wk in weeks:
+        for t in teams - playing[wk]:
+            byes.setdefault(t, wk)
+    return byes
+
+
 def schedule(week: int, all_games: list[dict]) -> dict:
     wk_games = [g for g in all_games if int(g["week"]) == week]
     teams_all = {t for g in all_games for t in (g["home_team"], g["away_team"])}

@@ -443,3 +443,79 @@ def test_league_context_includes_the_faab_market(monkeypatch):
     from booth import manual
     monkeypatch.setattr(manual, "FAAB_MARKET", manual.CONFIG / "faab_market.example.json")
     assert mcp_server.get_league_context()["faab_market"]["dan_remaining"] == 72
+
+
+def test_roster_adds_faab_slots_and_team_name(client):
+    team = mock.Mock()
+    team.roster.return_value = [{"name": "Joe Burrow", "selected_position": "QB", "editorial_team_abbr": "Cin"}]
+    client.league.to_team.return_value = team
+    client.league.teams.return_value = {ME: {"team_key": ME, "name": "Mayor of Titty City",
+                                             "faab_balance": "95", "waiver_priority": 4}}
+    out = client.my_roster()
+    assert out["source"] == "yahoo" and out["as_of"]
+    assert out["faab_remaining"] == 95 and out["waiver_priority"] == 4
+    assert out["team_name"] == "Mayor of Titty City"
+    assert out["players"][0]["slot"] == "QB"
+
+
+def test_roster_survives_missing_team_info(client):
+    team = mock.Mock()
+    team.roster.return_value = []
+    client.league.to_team.return_value = team
+    client.league.teams.side_effect = RuntimeError("boom")
+    out = client.my_roster()
+    assert "faab_remaining" not in out and out["players"] == []
+
+
+def test_standings_add_each_teams_faab(client):
+    client.league.standings.return_value = [{"team_key": OPP}, {"team_key": ME}]
+    client.league.teams.return_value = {OPP: {"faab_balance": "50"}, ME: {"faab_balance": "95"}}
+    rows = client.standings()
+    assert [r["faab_remaining"] for r in rows] == [50, 95]
+
+
+def test_free_agents_never_sends_lastweek(client):
+    client.league._players_from_page.return_value = (3, [{"n": 1}])
+    client.free_agents(limit=5, sort_type="lastweek")
+    client.free_agents(limit=5)
+    client.free_agents(limit=5, sort_type="season")
+    uris = [c.args[0] for c in client.league.yhandler.get.call_args_list]
+    assert "sort_type=lastmonth" in uris[0] and "sort_type=lastmonth" in uris[1]
+    assert "sort_type=season" in uris[2]
+    assert not any("lastweek" in u for u in uris)
+
+
+def test_team_codes_and_bye_weeks():
+    from booth.data import nflverse
+    games = [{"week": "1", "home_team": "CIN", "away_team": "LA"},
+             {"week": "1", "home_team": "JAX", "away_team": "WAS"},
+             {"week": "2", "home_team": "CIN", "away_team": "JAX"},
+             {"week": "3", "home_team": "LA", "away_team": "WAS"}]
+    byes = nflverse.bye_weeks(games)
+    assert byes == {"LA": 2, "WAS": 2, "CIN": 3, "JAX": 3}
+    assert [nflverse.team_code(a) for a in ("Cin", "LAR", "Jac", "Wsh", None)] == ["CIN", "LA", "JAX", "WAS", None]
+
+
+def test_roster_tool_adds_nfl_team_and_bye(monkeypatch):
+    from booth.data import nflverse
+    fake = mock.Mock()
+    fake.my_roster.return_value = {"source": "yahoo", "players": [{"name": "Joe Burrow", "editorial_team_abbr": "Cin"}]}
+    monkeypatch.setattr(mcp_server, "client", lambda: fake)
+    monkeypatch.setattr(nflverse, "games", lambda: [{"week": "5", "home_team": "CIN", "away_team": "MIA"},
+                                                   {"week": "6", "home_team": "MIA", "away_team": "BUF"}])
+    p = mcp_server.get_my_roster()["players"][0]
+    assert p["nfl_team"] == "CIN" and p["bye_week"] == 6
+
+
+def test_roster_tool_without_schedule_still_returns(monkeypatch):
+    from booth.data import nflverse
+    from booth.data.cache import DataSourceError
+    fake = mock.Mock()
+    fake.my_roster.return_value = {"source": "yahoo", "players": [{"name": "X", "editorial_team_abbr": "Buf"}]}
+    monkeypatch.setattr(mcp_server, "client", lambda: fake)
+
+    def down():
+        raise DataSourceError("offline")
+    monkeypatch.setattr(nflverse, "games", down)
+    p = mcp_server.get_my_roster()["players"][0]
+    assert p["nfl_team"] == "BUF" and "bye_week" not in p

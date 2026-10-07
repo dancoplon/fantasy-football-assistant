@@ -111,6 +111,13 @@ def _total(points) -> float | None:
     return None
 
 
+def _dollars(value) -> int | None:
+    try:
+        return int(float(value))
+    except (TypeError, ValueError):
+        return None
+
+
 def parse_scoreboard(raw: dict) -> list[dict]:
     """Turn a league scoreboard into [{week, status, teams: [{team_key, name, points, projected_points}]}]."""
     matchups = []
@@ -180,6 +187,10 @@ def summarize_transaction(txn: dict, tz=None) -> dict:
 
 # --- The six read-only calls behind the MCP tools ----------------------------
 
+# Ranking windows Yahoo accepts for football free agents (checked live Oct 7 2026;
+# "lastweek" is refused with "Invalid sort_type for this game provided.").
+FREE_AGENT_SORT_TYPES = ("lastmonth", "season")
+
 
 class YahooClient:
     """Read-only access to one league. Refreshes the token once on creation."""
@@ -215,19 +226,51 @@ class YahooClient:
     def league_settings(self) -> dict:
         return self._call(self.league.settings)
 
+    def team_info(self) -> dict:
+        """Every team's details keyed by team_key (name, faab_balance, waiver_priority, ...).
+
+        Empty if Yahoo won't say: these details only add to other results."""
+        try:
+            info = self._call(self.league.teams)
+        except YahooAccessError:
+            return {}
+        return {k: v for k, v in info.items() if isinstance(v, dict)} if isinstance(info, dict) else {}
+
     def my_roster(self, week: int | None = None) -> dict:
+        from datetime import datetime
+        from zoneinfo import ZoneInfo
+
         team = self.league.to_team(self.team_key)
         players = self._call(team.roster, week=week)
-        return {"source": "yahoo", "team_key": self.team_key, "week": week, "players": players}
+        for p in players:
+            p["slot"] = p.get("selected_position")
+        out = {
+            "source": "yahoo",
+            "as_of": datetime.now(ZoneInfo("America/New_York")).isoformat(timespec="minutes"),
+            "team_key": self.team_key,
+            "week": week,
+            "players": players,
+        }
+        mine = self.team_info().get(self.team_key, {})
+        if mine.get("name"):
+            out["team_name"] = mine["name"]
+        if _dollars(mine.get("faab_balance")) is not None:
+            out["faab_remaining"] = _dollars(mine["faab_balance"])
+        if mine.get("waiver_priority") not in (None, ""):
+            out["waiver_priority"] = mine["waiver_priority"]
+        return out
 
     def free_agents(
-        self, position: str | None = None, limit: int = 50, sort: str = "AR", sort_type: str = "lastweek"
+        self, position: str | None = None, limit: int = 50, sort: str = "AR", sort_type: str = "lastmonth"
     ) -> list[dict]:
         """Available players (free agents and players on waivers), best first.
 
         sort: AR = actual rank, OR = overall rank, PTS = fantasy points.
-        sort_type: season | lastweek | lastmonth.
+        sort_type: season | lastmonth. Yahoo football rejects "lastweek", so anything else
+        becomes lastmonth.
         """
+        if sort_type not in FREE_AGENT_SORT_TYPES:
+            sort_type = "lastmonth"
         players: list[dict] = []
         start = 0
         while len(players) < limit:
@@ -264,6 +307,10 @@ class YahooClient:
 
     def standings(self) -> list[dict]:
         rows = self._call(self.league.standings)
+        info = self.team_info()
         for r in rows:
             r["is_me"] = r.get("team_key") == self.team_key
+            faab = _dollars(info.get(r.get("team_key"), {}).get("faab_balance"))
+            if faab is not None:
+                r["faab_remaining"] = faab
         return rows

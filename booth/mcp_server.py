@@ -44,6 +44,25 @@ def get_league_settings() -> dict:
         return _error(exc)
 
 
+def _add_teams_and_byes(players) -> None:
+    """Give Yahoo players nflverse team codes (nfl_team) and bye weeks, like Dan's manual copies."""
+    if not isinstance(players, list):
+        return
+    try:
+        byes = nflverse.bye_weeks(nflverse.games())
+    except DataSourceError:
+        byes = {}
+    for p in players:
+        if not isinstance(p, dict) or "editorial_team_abbr" not in p:
+            continue
+        code = nflverse.team_code(p.get("editorial_team_abbr"))
+        p["nfl_team"] = code
+        if p.get("selected_position"):
+            p.setdefault("slot", p["selected_position"])
+        if code in byes:
+            p["bye_week"] = byes[code]
+
+
 @mcp.tool(annotations=READ_ONLY)
 def get_my_roster(week: int | None = None) -> dict:
     """My team's roster (Mayor of Titty City) with each player's slot, eligible positions, and injury status.
@@ -53,23 +72,27 @@ def get_my_roster(week: int | None = None) -> dict:
     source="manual", its as_of date, and a "warning" when it may be out of date.
     """
     try:
-        return client().my_roster(week)
+        roster = client().my_roster(week)
     except (ConfigError, AuthError, YahooAccessError) as exc:
         return {**manual_roster(), "yahoo_error": str(exc)}
+    _add_teams_and_byes(roster.get("players"))
+    return roster
 
 
 @mcp.tool(annotations=READ_ONLY)
-def get_free_agents(position: str | None = None, limit: int = 50, sort_type: str = "lastweek") -> list[dict] | dict:
+def get_free_agents(position: str | None = None, limit: int = 50, sort_type: str = "lastmonth") -> list[dict] | dict:
     """Available players (free agents and players on waivers), ranked by Yahoo actual rank.
 
     position: QB, RB, WR, TE, K, DEF, or W/R/T; omit for all positions.
     limit: max players to return (default 50).
-    sort_type: ranking window, one of lastweek, lastmonth, season.
+    sort_type: ranking window, lastmonth (default) or season.
     If Yahoo is unreachable, returns Dan's saved list from config/manual_free_agents.json
     with source="manual", its as_of time, and a note on what it covers.
     """
     try:
-        return client().free_agents(position=position, limit=limit, sort_type=sort_type)
+        players = client().free_agents(position=position, limit=limit, sort_type=sort_type)
+        _add_teams_and_byes(players)
+        return players
     except (ConfigError, AuthError, YahooAccessError) as exc:
         saved = manual_free_agents(position, limit)
         if saved is None:
@@ -85,7 +108,9 @@ def get_matchup(week: int | None = None) -> dict:
     his Yahoo matchup page (config/manual_matchup.json, source="manual") when it's for that week.
     """
     try:
-        return client().matchup(week)
+        result = client().matchup(week)
+        _add_teams_and_byes(result.get("opponent_roster"))
+        return result
     except (ConfigError, AuthError, YahooAccessError) as exc:
         if week is None:
             try:
@@ -113,7 +138,7 @@ def get_transactions(types: str = "add,drop,trade", count: int = 25) -> list[dic
 
 @mcp.tool(annotations=READ_ONLY)
 def get_standings() -> list[dict] | dict:
-    """League standings: rank, record, points for/against; my team is marked is_me=true."""
+    """League standings: rank, record, points for/against, and each team's FAAB left (faab_remaining); my team is marked is_me=true."""
     try:
         return client().standings()
     except (ConfigError, AuthError, YahooAccessError) as exc:
