@@ -203,9 +203,9 @@ class TelegramSource:
 
 def attachment_text(msg: dict) -> str:
     """What Booth sees of a message it can't read (as the mailbox's attachmentText)."""
-    kind = ("a photo" if msg.get("photo") else "a file" if msg.get("document")
-            else "a voice message" if msg.get("voice") or msg.get("audio") else "a video" if msg.get("video")
-            else "a sticker" if msg.get("sticker") else "something")
+    kind = ("a photo" if "photo" in msg else "a file" if "document" in msg
+            else "a voice message" if "voice" in msg or "audio" in msg else "a video" if "video" in msg
+            else "a sticker" if "sticker" in msg else "something")
     caption = msg.get("caption")
     return f"[sent {kind} with the caption: {caption}]" if isinstance(caption, str) and caption else f"[sent {kind}]"
 

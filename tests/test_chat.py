@@ -320,7 +320,8 @@ def test_telegram_source_answers_only_dans_chat(tg):
     ] if params["offset"] == 0 else []
     source = chat.TelegramSource(42)
     got = source.fetch()
-    assert [(m["id"], m["text"], m["reply_to"]) for m in got] == [(10, "who's my flex?", "Booth: Sunday final lineup pass")]
+    assert [(m["id"], m["text"], m["reply_to"]) for m in got] == [(10, "who's my flex?", "Booth: Sunday final lineup pass"),
+                                                                  (12, "[sent a sticker]", "")]
     assert calls[0][1]["timeout"] == 25
     source.done([10])
     assert source.fetch() == [] and calls[-1][1]["offset"] == 11  # later updates are fetched again
