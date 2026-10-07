@@ -161,6 +161,10 @@ def test_plist_is_valid(monkeypatch):
     plistlib.loads(plistlib.dumps(d))
     assert d["ProgramArguments"][-3:] == ["booth", "run", "due"]
     assert d["RunAtLoad"] and d["StartInterval"] == 1800 and len(d["StartCalendarInterval"]) == 4
+    listener = schedule.listener_plist_dict()
+    plistlib.loads(plistlib.dumps(listener))
+    assert listener["ProgramArguments"][-2:] == ["booth", "listen"] and listener["KeepAlive"] and listener["RunAtLoad"]
+    assert listener["EnvironmentVariables"] == d["EnvironmentVariables"]
 
 
 def test_on_time_saturday_report_not_late_despite_thursday_game(env, games):
@@ -432,12 +436,12 @@ def test_status_shows_every_check_not_just_reports(monkeypatch, tmp_path):
     monkeypatch.setattr(schedule, "_launchctl", lambda *a: type("R", (), {"returncode": 0, "stdout": out, "stderr": ""})())
     text = schedule.status()
     assert "runs = 3" in text and "path = x" not in text
-    assert text.count("(none yet)") == 2
+    assert text.count("(none yet)") == 3 and "Telegram listener: running" in text
     (tmp_path / "logs").mkdir()
     (tmp_path / "logs" / "launchd.out.log").write_text("".join(f"2026-10-05 18:{m:02d}:00 EDT  nothing due\n" for m in range(10)))
     text = schedule.status()
     assert "18:09:00 EDT  nothing due" in text and "18:04:00" not in text
-    assert text.count("(none yet)") == 1
+    assert text.count("(none yet)") == 2
 
 
 def _fails_n_times(n, calls=None):

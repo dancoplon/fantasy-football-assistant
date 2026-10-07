@@ -1,6 +1,7 @@
-"""Install Booth's launchd job on the Mac.
+"""Install Booth's launchd jobs on the Mac.
 
-One LaunchAgent (com.booth.scheduler) runs `booth run due`:
+com.booth.listener runs `booth listen` all the time, to answer Dan's Telegram messages.
+com.booth.scheduler runs `booth run due`:
   - at each report time (Tue 8 AM, Thu 12 PM, Sat 8 AM, Sun 8 AM, Eastern),
   - every 30 minutes, and at login.
 launchd runs a calendar job missed during sleep as soon as the Mac wakes, and
@@ -29,6 +30,9 @@ from booth.jobs import EASTERN, SCHEDULE, mark_installed
 
 LABEL = "com.booth.scheduler"
 PLIST = Path.home() / "Library" / "LaunchAgents" / f"{LABEL}.plist"
+# The listener answers Dan's Telegram messages; launchd keeps it running (booth/chat.py).
+LISTENER = "com.booth.listener"
+LISTENER_PLIST = Path.home() / "Library" / "LaunchAgents" / f"{LISTENER}.plist"
 # launchd weekday numbers: 0 = Sunday ... 6 = Saturday
 RUN_WEEKDAY = {"tue": 2, "thu": 4, "sat": 6, "sun": 0}
 
@@ -72,17 +76,37 @@ def _bin(name: str) -> str:
     raise FileNotFoundError(f"Couldn't find `{name}`. Install it first.")
 
 
-def plist_dict() -> dict:
+def _env(uv: str) -> dict:
     home = str(Path.home())
-    uv = _bin("uv")
     dirs = [str(Path(uv).parent), f"{home}/.local/bin", "/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/bin", "/usr/sbin", "/sbin"]
-    path = ":".join(dict.fromkeys(dirs))
+    return {"PATH": ":".join(dict.fromkeys(dirs)), "HOME": home}
+
+
+def listener_plist_dict() -> dict:
+    uv = _bin("uv")
+    logs = ROOT / "logs"
+    return {
+        "Label": LISTENER,
+        "ProgramArguments": [uv, "run", "--quiet", "--project", str(ROOT), "booth", "listen"],
+        "WorkingDirectory": str(ROOT),
+        "EnvironmentVariables": _env(uv),
+        "RunAtLoad": True,
+        "KeepAlive": True,  # restarted if it ever stops
+        "ThrottleInterval": 30,
+        "ProcessType": "Background",
+        "StandardOutPath": str(logs / "listener.out.log"),
+        "StandardErrorPath": str(logs / "listener.err.log"),
+    }
+
+
+def plist_dict() -> dict:
+    uv = _bin("uv")
     logs = ROOT / "logs"
     return {
         "Label": LABEL,
         "ProgramArguments": [uv, "run", "--quiet", "--project", str(ROOT), "booth", "run", "due"],
         "WorkingDirectory": str(ROOT),
-        "EnvironmentVariables": {"PATH": path, "HOME": home},
+        "EnvironmentVariables": _env(uv),
         "StartCalendarInterval": calendar_intervals(),
         "StartInterval": 1800,
         "RunAtLoad": True,
@@ -104,24 +128,31 @@ def _unload(domain: str, label: str, wait_seconds: float = 10) -> None:
         time.sleep(0.5)
 
 
-def install() -> str:
-    (ROOT / "logs").mkdir(exist_ok=True)
-    PLIST.parent.mkdir(parents=True, exist_ok=True)
-    with PLIST.open("wb") as f:
-        plistlib.dump(plist_dict(), f)
+def _load(label: str, plist: Path, data: dict) -> None:
+    plist.parent.mkdir(parents=True, exist_ok=True)
+    with plist.open("wb") as f:
+        plistlib.dump(data, f)
     domain = f"gui/{os.getuid()}"
-    _unload(domain, LABEL)
-    res = _launchctl("bootstrap", domain, str(PLIST))
+    _unload(domain, label)
+    res = _launchctl("bootstrap", domain, str(plist))
     if res.returncode != 0:
-        raise RuntimeError(f"launchctl bootstrap failed: {res.stderr.strip()}")
+        raise RuntimeError(f"launchctl bootstrap failed for {label}: {res.stderr.strip()}")
+
+
+def install() -> str:
+    """Install (or reinstall) the report scheduler and the Telegram listener."""
+    (ROOT / "logs").mkdir(exist_ok=True)
+    _load(LABEL, PLIST, plist_dict())
     mark_installed()
-    return f"Installed {PLIST}"
+    _load(LISTENER, LISTENER_PLIST, listener_plist_dict())
+    return f"Installed {PLIST} and {LISTENER_PLIST}"
 
 
 def uninstall() -> str:
-    _launchctl("bootout", f"gui/{os.getuid()}/{LABEL}")
-    PLIST.unlink(missing_ok=True)
-    return f"Removed {LABEL}"
+    for label, plist in ((LABEL, PLIST), (LISTENER, LISTENER_PLIST)):
+        _launchctl("bootout", f"gui/{os.getuid()}/{label}")
+        plist.unlink(missing_ok=True)
+    return f"Removed {LABEL} and {LISTENER}"
 
 
 def status() -> str:
@@ -133,6 +164,8 @@ def status() -> str:
         "Installed.", *keep,
         "Recent checks (every scheduled run, including ones with nothing due):", *_tail(ROOT / "logs" / "launchd.out.log", 5),
         "Recent reports and problems:", *_tail(ROOT / "logs" / "booth.log", 8),
+        f"Telegram listener: {'running' if _launchctl('print', f'gui/{os.getuid()}/{LISTENER}').returncode == 0 else 'not installed'}",
+        *_tail(ROOT / "logs" / "chat.log", 5),
     ])
 
 

@@ -21,3 +21,13 @@ def _no_real_telegram(monkeypatch, tmp_path_factory):
     monkeypatch.delenv("TELEGRAM_BOT_TOKEN", raising=False)
     empty = tmp_path_factory.mktemp("no-telegram")
     monkeypatch.setattr(deliver, "state_dir", lambda: empty)
+
+
+@pytest.fixture(autouse=True)
+def _no_real_chat_state(monkeypatch, tmp_path_factory):
+    """Tests never read or write the Mac's chat notes, history or mailbox address."""
+    from booth import chat
+
+    monkeypatch.delenv("BOOTH_MAILBOX_URL", raising=False)
+    empty = tmp_path_factory.mktemp("no-chat-state")
+    monkeypatch.setattr(chat, "state_dir", lambda: empty)

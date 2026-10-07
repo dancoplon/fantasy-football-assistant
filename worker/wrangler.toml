@@ -1,0 +1,16 @@
+name = "booth-mailbox"
+main = "src/index.ts"
+compatibility_date = "2025-09-01"
+workers_dev = true
+
+[[durable_objects.bindings]]
+name = "MAILBOX"
+class_name = "Mailbox"
+
+# SQLite-backed Durable Objects are on the Workers free plan.
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["Mailbox"]
+
+[observability]
+enabled = true
