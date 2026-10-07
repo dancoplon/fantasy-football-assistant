@@ -127,14 +127,16 @@ def get_standings() -> list[dict] | dict:
 def get_league_context() -> dict:
     """League rules (scoring, roster slots, waivers, deadlines), Dan's strategy notes, and what this
     league pays on waivers ("faab_market": each team's budget left, recent winning bids, price
-    ranges by position, claims Dan lost). Read this first on every run."""
+    ranges by position, claims Dan lost), and "dan_notes": what Dan told Booth in Telegram to keep
+    in mind, oldest first. Read this first on every run."""
     from booth import manual
+    from booth.chat import dan_notes
 
     market = faab_market() or {"note": (
         "config/faab_market.json is there but couldn't be read, so bids can't be checked against this "
         "league's prices; Dan should ask for it to be fixed (booth manual-status)." if manual.FAAB_MARKET.exists()
         else "No copy of the league's FAAB history yet (config/faab_market.json).")}
-    return {"league": league_config(), "strategy": strategy_text(), "faab_market": market}
+    return {"league": league_config(), "strategy": strategy_text(), "faab_market": market, "dan_notes": dan_notes()}
 
 
 @mcp.tool(annotations=READ_ONLY)

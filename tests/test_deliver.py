@@ -64,6 +64,7 @@ class FakeTelegram:
                                                         "text": text}}
                            for i, (cid, name, text) in enumerate(self.messages)],
             "sendMessage": {"message_id": 1},
+            "getWebhookInfo": {"url": ""},
         }[method]
         return mock.Mock(status_code=200, json=lambda: {"ok": True, "result": result})
 

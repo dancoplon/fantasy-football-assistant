@@ -22,6 +22,8 @@ config/manual_free_agents.json
 config/manual_matchup.json
 config/manual_roster.local.json
 config/faab_market.json
+# Half-written copies of those (left behind only by a crash mid-write).
+config/*.tmp
 
 # --- Python ----------------------------------------------------------------------
 __pycache__/
@@ -40,3 +42,8 @@ dist/
 .DS_Store
 .idea/
 .vscode/
+
+# --- Reply service (worker/) -------------------------------------------------------
+worker/node_modules/
+worker/.wrangler/
+worker/.dev.vars

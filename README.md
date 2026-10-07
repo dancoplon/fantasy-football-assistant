@@ -89,7 +89,7 @@ Set `BOOTH_MODEL` to pick a model; the default is Claude Code's. Runs use `--eff
 
 ## Schedule and delivery (macOS)
 
-- `uv run booth schedule install` installs one LaunchAgent (`com.booth.scheduler`) that runs `booth run due` at each report time (Tue 8 AM, Thu 12 PM, Sat 8 AM, Sun 8 AM Eastern, converted to the Mac's time zone), every 30 minutes while awake, and at login. A report missed while the Mac slept or was off goes out on the next wake; a report already delivered is never sent twice, and one superseded by a later report is skipped.
+- `uv run booth schedule install` installs two LaunchAgents: the Telegram listener (`com.booth.listener`, see below) and `com.booth.scheduler`, which runs `booth run due` at each report time (Tue 8 AM, Thu 12 PM, Sat 8 AM, Sun 8 AM Eastern, converted to the Mac's time zone), every 30 minutes while awake, and at login. A report missed while the Mac slept or was off goes out on the next wake; a report already delivered is never sent twice, and one superseded by a later report is skipped.
 - When a game is played before Thursday night (week 1's Wednesday opener, Thanksgiving eve), the Thursday check moves to noon that day.
 - A lineup report stays sendable until the week's last kickoff (Monday night), so a Monday catch-up still helps with the players who haven't played. One sent after a kickoff it should have preceded starts with "LATE:", judged at the moment it's sent. If the Mac slept through the whole window, Booth says once that it missed the report.
 - A run keeps the Mac from idle-sleeping until it finishes (`caffeinate`). A closed lid on battery still sleeps, and a report that finishes after its window closes isn't sent.
@@ -104,5 +104,22 @@ Set `BOOTH_MODEL` to pick a model; the default is Claude Code's. Runs use `--eff
 - `uv run booth schedule wake` (optional) asks for an admin password once and sets a wake one minute after the 8 AM reports on Tue/Sat/Sun. It only helps with the lid open.
 - Scheduled runs need Claude Code's standalone CLI signed in (`~/.local/bin/claude`).
 - `uv run booth schedule status` shows the job and recent log lines; logs are in `logs/`.
+
+## Chat (two-way Telegram)
+
+Dan can write to the Booth bot and get answers while the Mac is awake. `booth listen` (the `com.booth.listener` LaunchAgent, kept running by launchd) collects his messages and answers each batch with `claude -p` on his Claude subscription: the same MCP tools, web search and data as the reports, with `prompts/chat.md`, his notes, the last few reports and the recent conversation. Answers use `--effort medium` (set `BOOTH_CHAT_EFFORT` to change it). Besides answering, Claude can:
+
+- keep notes Dan wants remembered (`state/notes.json`); reports read them through `get_league_context` (`dan_notes`),
+- update his roster copy (`config/manual_roster.local.json`) when he says he made a move in Yahoo: add, drop, move to a slot/bench/IR, or FAAB left. Each change is listed under `chat_updates` in that file,
+- rerun a report (`booth rerun <run>` in the background; it waits for any run in progress, and marks the report delivered if it's the one due).
+
+Only Dan's chat (the one saved by `booth telegram-setup`) is answered. Logs are in `logs/chat.log`.
+
+Messages reach the Mac one of two ways:
+
+- **The mailbox** (`worker/`, a Cloudflare Worker with a SQLite Durable Object, free plan, no AI and no API key). Telegram's webhook delivers each message there; the Mac checks in every 10 seconds while awake and collects them. When the Mac hasn't checked in for 2 minutes, the mailbox replies "Booth is asleep..." (once per sleep, again after 3 hours), and Booth answers everything when the Mac wakes. Strangers get their chat id once, then silence. The Mac finds the mailbox from the bot's webhook (or `BOOTH_MAILBOX_URL`); requests are signed with a secret derived from the bot token.
+- **Telegram's getUpdates**, when no webhook is set: the same answers, but no "asleep" reply, and Telegram drops messages after about a day.
+
+The mailbox deploys from GitHub Actions (`.github/workflows/mailbox.yml`) on each change to `worker/`, or by hand from the Actions tab. It needs three repository secrets: `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID` and `TELEGRAM_BOT_TOKEN` (Booth's bot). Without them it only runs the checks. After deploying, it points the bot's webhook at `https://booth-mailbox.<subdomain>.workers.dev/telegram`. Worker tests: `cd worker && npm ci && npm run check && npm test`.
 
 Run the tests with `uv run pytest`.

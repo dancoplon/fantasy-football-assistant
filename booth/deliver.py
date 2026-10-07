@@ -204,11 +204,19 @@ def telegram_setup(replace: bool = False) -> tuple[bool, str]:
                       "run `uv run booth telegram-setup --replace`.")
     code = _setup_code()
     found = None
-    for update in _telegram("getUpdates", allowed_updates=["message"]):
+    try:
+        updates = _telegram("getUpdates", allowed_updates=["message"])
+    except DeliveryError as exc:
+        if not any(w in str(exc).lower() for w in ("webhook", "conflict")):  # someone else collects messages
+            raise
+        updates = []
+    for update in updates:
         msg = update.get("message") or {}
         chat = msg.get("chat") or {}
         if chat.get("type") == "private" and code in (msg.get("text") or ""):
             found = chat
+    if not found:
+        found = _chat_from_reply_service(code)  # Booth's listener or mailbox may have collected it first
     if not found:
         return False, (f"Almost done. On the phone with Telegram, open https://t.me/{name}?start={code} and tap "
                        f"Start (if there's no Start button, send the bot this message: {code}). Then run this again.")
@@ -218,6 +226,24 @@ def telegram_setup(replace: bool = False) -> tuple[bool, str]:
     handle = f"(@{found['username']})" if found.get("username") else ""
     who = " ".join(x for x in (found.get("first_name"), handle) if x) or "your Telegram account"
     return True, f"Connected @{name} to {who}. Sent a hello there."
+
+
+def _chat_from_reply_service(code: str) -> dict | None:
+    """Once Booth's listener or mailbox is collecting the bot's messages, getUpdates can't be
+    used here, so look for the code among the chats they have heard from."""
+    from booth import chat
+
+    seen: list[dict] = []
+    if chat.mailbox_url(refresh=True):
+        try:
+            seen = chat.mailbox_chats()
+        except chat.ChatError as exc:
+            raise DeliveryError(f"Telegram sends this bot's messages to Booth's mailbox, and {exc}.") from None
+    seen += chat._read_json(state_dir() / "telegram_others.json", [])
+    for c in seen:
+        if code in str(c.get("text") or "") and str(c.get("id", "")).lstrip("-").isdigit():
+            return {"id": int(c["id"]), "first_name": c.get("name") or ""}
+    return None
 
 
 def notify(text: str) -> None:

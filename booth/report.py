@@ -144,7 +144,7 @@ def mcp_config() -> str:
     return json.dumps({"mcpServers": {MCP_SERVER: {"command": sys.executable, "args": ["-m", "booth.mcp_server"]}}})
 
 
-def parse_stream(stdout: str, returncode: int = 0, stderr: str = "") -> dict:
+def parse_stream(stdout: str, returncode: int = 0, stderr: str = "", require_tools: bool = True) -> dict:
     """Pull the result out of `--output-format stream-json`, and check the report was
     built from Booth's data: the MCP server connected and at least one of its tools ran.
     Otherwise Claude may still return a well-formed report that is guesswork."""
@@ -170,7 +170,7 @@ def parse_stream(stdout: str, returncode: int = 0, stderr: str = "") -> dict:
     servers = {s.get("name"): s.get("status") for s in (init or {}).get("mcp_servers") or []}
     if servers.get(MCP_SERVER) != "connected":
         raise ReportError(f"Booth's Yahoo data server didn't start (status: {servers.get(MCP_SERVER, 'missing')}).")
-    if not any(name.startswith(f"mcp__{MCP_SERVER}__") for name in tools):
+    if require_tools and not any(name.startswith(f"mcp__{MCP_SERVER}__") for name in tools):
         raise ReportError("Claude wrote the report without using any of Booth's data tools.")
     return result
 
@@ -180,8 +180,12 @@ def parse_stream(stdout: str, returncode: int = 0, stderr: str = "") -> dict:
 DEFAULT_EFFORT = "high"
 
 
-def run_claude(prompt: str, timeout: int = 900, schema: dict | None = None) -> dict:
-    """Run `claude -p` with Booth's MCP server and return its result (with structured_output)."""
+def run_claude(prompt: str, timeout: int = 900, schema: dict | None = None, effort: str | None = None,
+               require_tools: bool = True) -> dict:
+    """Run `claude -p` with Booth's MCP server and return its result (with structured_output).
+
+    effort defaults to BOOTH_EFFORT, else DEFAULT_EFFORT. require_tools=False accepts an answer
+    that needed none of Booth's data tools (a chat reply to "thanks")."""
     cmd = [
         claude_bin(),
         "-p",
@@ -196,7 +200,7 @@ def run_claude(prompt: str, timeout: int = 900, schema: dict | None = None) -> d
     ]
     if os.getenv("BOOTH_MODEL"):
         cmd += ["--model", os.environ["BOOTH_MODEL"]]
-    effort = os.getenv("BOOTH_EFFORT", DEFAULT_EFFORT).strip()
+    effort = (effort or os.getenv("BOOTH_EFFORT", DEFAULT_EFFORT)).strip()
     if effort and effort != "default":  # "default" leaves it to Claude Code
         cmd += ["--effort", effort]
     try:
@@ -205,7 +209,7 @@ def run_claude(prompt: str, timeout: int = 900, schema: dict | None = None) -> d
         raise ReportError("Claude Code isn't installed or not on PATH (set BOOTH_CLAUDE_BIN).") from exc
     except subprocess.TimeoutExpired as exc:
         raise ReportError(f"Claude didn't finish within {timeout // 60} minutes.") from exc
-    return parse_stream(proc.stdout, proc.returncode, proc.stderr)
+    return parse_stream(proc.stdout, proc.returncode, proc.stderr, require_tools)
 
 
 def _kickoff(g: dict) -> datetime:
