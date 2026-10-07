@@ -142,10 +142,10 @@ class MailboxSource:
     """Messages held by the mailbox. Every fetch also tells it the Mac is awake."""
 
     def __init__(self, chat: int):
-        self.chat = str(chat)
+        self.chat = chat
 
     def fetch(self) -> list[dict]:
-        got = _mailbox("GET", "/poll", params={"chat": self.chat}).get("messages", [])
+        got = _mailbox("GET", "/poll", params={"chat": str(self.chat)}).get("messages", [])
         return [_message(m.get("updateId"), m.get("text"), m.get("replyTo"), m.get("receivedAt"))
                 for m in got if isinstance(m, dict)]
 
@@ -175,30 +175,39 @@ class TelegramSource:
         for u in updates:
             msg = u.get("message") or {}
             chat = msg.get("chat") or {}
-            if chat.get("id") == self.chat and isinstance(msg.get("text"), str):
+            if chat.get("id") == self.chat:
                 when = datetime.fromtimestamp(msg.get("date", time.time()), timezone.utc).isoformat()
-                out.append(_message(u["update_id"], msg["text"], (msg.get("reply_to_message") or {}).get("text"), when))
+                text = msg["text"] if isinstance(msg.get("text"), str) else attachment_text(msg)
+                out.append(_message(u["update_id"], text, (msg.get("reply_to_message") or {}).get("text"), when))
             elif chat.get("type") == "private" and isinstance(msg.get("text"), str):
                 others.append({"id": chat.get("id"), "name": chat.get("first_name", ""), "text": msg["text"][:200]})
         if others:  # so `booth telegram-setup --replace` can still find a new chat's code
             seen = _read_json(state_dir() / "telegram_others.json", [])
-            _write_json(state_dir() / "telegram_others.json", (others + seen)[:20])
-        if updates and not out:
+            _write_json(state_dir() / "telegram_others.json", [o for o in others if o not in seen][::-1][:20] + seen[:20])
+        if updates and not out:  # nothing for Booth: confirm them so Telegram moves on
             self.done([u["update_id"] for u in updates])
-        self._last = max((u["update_id"] for u in updates), default=None)
         return out
 
     def heartbeat(self) -> None:
         pass
 
     def done(self, ids: list[int]) -> None:
-        last = max([*ids, getattr(self, "_last", None) or 0])
+        """Confirm everything up to the newest of these. Later updates are fetched again."""
         offset = _read_json(self.path, {}).get("offset", 0)
-        if last + 1 > offset:
-            _write_json(self.path, {"offset": last + 1})
+        if ids and max(ids) + 1 > offset:
+            _write_json(self.path, {"offset": max(ids) + 1})
 
     def wait(self) -> None:
         pass  # getUpdates already waited
+
+
+def attachment_text(msg: dict) -> str:
+    """What Booth sees of a message it can't read (as the mailbox's attachmentText)."""
+    kind = ("a photo" if msg.get("photo") else "a file" if msg.get("document")
+            else "a voice message" if msg.get("voice") or msg.get("audio") else "a video" if msg.get("video")
+            else "a sticker" if msg.get("sticker") else "something")
+    caption = msg.get("caption")
+    return f"[sent {kind} with the caption: {caption}]" if isinstance(caption, str) and caption else f"[sent {kind}]"
 
 
 def _message(update_id, text, reply_to, received) -> dict:
@@ -425,7 +434,7 @@ def build_prompt(messages: list[dict], now: datetime) -> str:
     turns = history()[-HISTORY_TURNS:]
     convo = "\n\n".join(f"{'Dan' if t['role'] == 'user' else 'Booth'}: {t['text']}" for t in turns) or "(this is the first message)"
     waited = ""
-    if len(messages) > 1 or (messages and messages[0].get("at") and now - _parse(messages[0]["at"]) > timedelta(minutes=10)):
+    if messages and messages[0].get("at") and now - _parse(messages[0]["at"]) > timedelta(minutes=10):
         waited = ("Dan sent this while the Mac was asleep, so the answer is late: if any of it is out of date by now, "
                   "answer for now, and start with a few words acknowledging the wait.\n\n")
     fields = {
@@ -519,27 +528,67 @@ def _keep_typing(stop: threading.Event, source) -> None:
         stop.wait(4.5)  # Telegram shows "typing" for 5 seconds
 
 
-def handle(messages: list[dict], source, send_fn=None, answer_fn=answer) -> None:
-    """Answer one batch and mark it done, whatever happens, so a bad message can't loop forever."""
+def _answered() -> list[int]:
+    return [i for i in _read_json(state_dir() / "chat_answered.json", []) if isinstance(i, int)]
+
+
+def _outbox():
+    return state_dir() / "chat_outbox.json"
+
+
+def deliver_outbox(source, send_fn=None) -> bool:
+    """Send an answer that's waiting to go out, then mark its messages done.
+
+    Returns False if it still can't be sent (say, Wi-Fi isn't back after a wake): the answer
+    stays in the outbox and its messages stay unacknowledged, so nothing is lost."""
     from booth.deliver import _send_telegram
 
-    send_fn = send_fn or _send_telegram
+    box = _read_json(_outbox(), {})
+    if not box:
+        return True
+    try:
+        (send_fn or _send_telegram)(box["reply"])
+    except Exception as exc:  # noqa: BLE001 - tried again next round
+        _log(f"couldn't send the answer to {box.get('ids')} yet: {exc}")
+        return False
+    _outbox().unlink(missing_ok=True)
+    _log(f"answered {box.get('ids')}")
+    _ack(source, box.get("ids") or [])
+    return True
+
+
+def _ack(source, ids: list[int]) -> None:
+    try:
+        source.done(ids)
+    except Exception as exc:  # noqa: BLE001 - they're on the answered list, so they're acked next time
+        _log(f"couldn't mark {ids} done yet: {exc}")
+
+
+def handle(messages: list[dict], source, send_fn=None, answer_fn=answer) -> bool:
+    """Answer one batch. Every message is answered exactly once: messages already answered (an
+    acknowledgement that didn't get through) are only marked done, and an answer is saved
+    before it's sent, so a failed send is retried instead of answering again. A failed answer
+    still gets a reply ("hit a snag"), so a bad message can't loop forever."""
+    answered = _answered()
+    fresh = [m for m in messages if m["id"] not in answered]
+    if not fresh:
+        if _read_json(_outbox(), {}):
+            return deliver_outbox(source, send_fn)  # their answer hasn't gone out yet
+        _ack(source, [m["id"] for m in messages])
+        return True
     stop = threading.Event()
     typing = threading.Thread(target=_keep_typing, args=(stop, source), daemon=True)
     typing.start()
     try:
-        reply = answer_fn(messages)
+        reply = answer_fn(fresh)
     except Exception as exc:  # noqa: BLE001 - tell Dan instead of going quiet
-        _log(f"FAILED answering {[m['id'] for m in messages]}: {exc}")
+        _log(f"FAILED answering {[m['id'] for m in fresh]}: {exc}")
         reply = SNAG.format(str(exc)[:150])
     finally:
         stop.set()
-    try:
-        send_fn(reply)
-        _log(f"answered {[m['id'] for m in messages]}")
-    except Exception as exc:  # noqa: BLE001 - logged; the message is still marked done
-        _log(f"FAILED sending the answer: {exc}")
-    source.done([m["id"] for m in messages])
+    _write_json(_outbox(), {"ids": [m["id"] for m in messages], "reply": reply})
+    _write_json(state_dir() / "chat_answered.json", (answered + [m["id"] for m in fresh])[-500:])
+    return deliver_outbox(source, send_fn)
 
 
 def listen(max_rounds: int | None = None) -> None:
@@ -550,7 +599,7 @@ def listen(max_rounds: int | None = None) -> None:
     rounds = 0
     source = None
     picked_at = 0.0
-    failures = 0
+    failures = unsent = 0
     recheck = False
     while max_rounds is None or rounds < max_rounds:
         rounds += 1
@@ -558,7 +607,7 @@ def listen(max_rounds: int | None = None) -> None:
         if not chat or not os.getenv("TELEGRAM_BOT_TOKEN", "").strip():
             time.sleep(60)  # Telegram isn't connected yet
             continue
-        if source is None or time.time() - picked_at > URL_RECHECK.total_seconds():
+        if source is None or source.chat != chat or time.time() - picked_at > URL_RECHECK.total_seconds():
             source, picked_at = _source(chat, refresh=recheck), time.time()
             recheck = False
             _log(f"listening via {type(source).__name__}")
@@ -573,7 +622,16 @@ def listen(max_rounds: int | None = None) -> None:
                 source, recheck = None, True  # the webhook may have changed: ask Telegram again
             time.sleep(min(60, 5 * failures))
             continue
+        if not deliver_outbox(source):  # an earlier answer still waiting to go out
+            unsent += 1
+            time.sleep(min(60, 5 * unsent))
+            continue
+        unsent = 0
         if messages:
-            handle(messages, source)
+            try:
+                handle(messages, source)
+            except Exception as exc:  # noqa: BLE001 - never let one batch stop the listener
+                _log(f"FAILED handling {[m['id'] for m in messages]}: {exc}")
+                time.sleep(10)
         else:
             source.wait()

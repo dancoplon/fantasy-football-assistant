@@ -16,11 +16,18 @@ test("parseUpdate keeps private text messages and the message they reply to", ()
   assert.deepEqual(m, { updateId: 7, chat: "8874735915", name: "Dan C", text: "tell me more about Headway", replyTo: "Top picks ..." });
 });
 
-test("parseUpdate ignores groups, stickers and edits", () => {
+test("parseUpdate ignores groups and edits", () => {
   assert.equal(parseUpdate({ update_id: 1, message: { chat: { id: -5, type: "group" }, text: "hi" } }), null);
-  assert.equal(parseUpdate({ update_id: 2, message: { chat: { id: 5, type: "private" }, sticker: {} } }), null);
   assert.equal(parseUpdate({ update_id: 3, edited_message: { chat: { id: 5, type: "private" }, text: "hi" } }), null);
   assert.equal(parseUpdate(null), null);
+});
+
+test("parseUpdate describes what it can't read, keeping any caption", () => {
+  const chat = { id: 5, type: "private" };
+  assert.equal(parseUpdate({ update_id: 2, message: { chat, sticker: {} } })!.text, "[sent a sticker]");
+  assert.equal(parseUpdate({ update_id: 4, message: { chat, photo: [{}], caption: "my roster" } })!.text,
+    "[sent a photo with the caption: my roster]");
+  assert.equal(parseUpdate({ update_id: 5, message: { chat, document: {} } })!.text, "[sent a file]");
 });
 
 test("split leaves short text alone", () => {

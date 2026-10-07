@@ -4,7 +4,7 @@ name: Mailbox
 # Dan's messages for the Mac (which answers them) and says Booth is asleep when the Mac is. Needs
 # these repository secrets: CLOUDFLARE_API_TOKEN, CLOUDFLARE_ACCOUNT_ID and TELEGRAM_BOT_TOKEN
 # (Booth's bot). Until all three are set, it only runs the checks. This repo is public, so nothing
-# here may print a secret.
+# here may print a secret, and only the steps that need them see the secrets (not npm installs).
 on:
   push:
     branches: [main]
@@ -23,10 +23,6 @@ jobs:
   deploy:
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    env:
-      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-      TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
     defaults:
       run:
         working-directory: worker
@@ -48,6 +44,10 @@ jobs:
       - name: Look for the keys
         id: keys
         if: github.event_name != 'pull_request'
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
         run: |
           missing=""
           for name in CLOUDFLARE_API_TOKEN CLOUDFLARE_ACCOUNT_ID TELEGRAM_BOT_TOKEN; do
@@ -62,6 +62,10 @@ jobs:
 
       - name: Deploy
         if: steps.keys.outputs.ready == 'true'
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
         run: |
           npx wrangler deploy
           # The token goes in after the deploy, since a worker has to exist before it can hold secrets.
@@ -71,6 +75,10 @@ jobs:
 
       - name: Point the Booth bot at it
         if: steps.keys.outputs.ready == 'true'
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
         run: |
           python3 - <<'PY'
           import hashlib, hmac, json, os, re, sys, urllib.request

@@ -238,11 +238,14 @@ def cmd_rerun(args: argparse.Namespace) -> int:
                     if os.getenv("BOOTH_DRY_RUN") == "1":
                         message = f"[DRY RUN] {message}"
                     send(message)
-                    record_manual_delivery(args.run, result["snapshot"]["week"])
                 except Exception as exc:  # noqa: BLE001 - Dan asked for it, so tell him it failed
                     print(f"error: {exc}", file=sys.stderr)
                     send(f"Booth couldn't rebuild the {label} you asked for: {str(exc)[:200]}")
                     return 1
+                try:
+                    record_manual_delivery(args.run, result["snapshot"]["week"])
+                except Exception as exc:  # noqa: BLE001 - sent; at worst the schedule sends it again
+                    print(f"warning: couldn't mark it delivered: {exc}", file=sys.stderr)
             print(f"sent the {label}")
             return 0
         except LockBusy:

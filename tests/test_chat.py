@@ -160,7 +160,7 @@ def test_messages_from_a_sleep_are_answered_together(monkeypatch):
     assert "(Sun 9:05 AM) is Swift playing?\n\n(Sun 9:40 AM) also who's my flex" in prompts[0]
     assert "sent this while the Mac was asleep" in prompts[0]
     claude, prompts = reply_with()
-    chat.answer([msg(3, "thanks")], NOW, claude=claude)
+    chat.answer([msg(3, "thanks"), msg(4, "one more thing")], NOW, claude=claude)  # two quick texts: no wait
     assert "asleep" not in prompts[0]
 
 
@@ -185,7 +185,7 @@ class FakeSource:
 def test_handle_always_answers_and_marks_done(monkeypatch):
     monkeypatch.setattr(chat, "_keep_typing", lambda stop, source: None)
     source, sent = FakeSource(), []
-    chat.handle([msg(4, "hi")], source, send_fn=sent.append, answer_fn=lambda m: "Hello.")
+    assert chat.handle([msg(4, "hi")], source, send_fn=sent.append, answer_fn=lambda m: "Hello.")
     assert sent == ["Hello."] and source.acked == [4]
 
     def broken(messages):
@@ -194,10 +194,43 @@ def test_handle_always_answers_and_marks_done(monkeypatch):
     assert sent[-1] == "Booth hit a snag answering that (Claude didn't finish within 10 minutes.). Try again in a minute?"
     assert source.acked == [4, 5, 6]
 
-    def unsendable(text):
+
+def test_an_answer_that_cant_be_sent_waits_and_is_never_redone(monkeypatch):
+    monkeypatch.setattr(chat, "_keep_typing", lambda stop, source: None)
+    source, sent, answers = FakeSource(), [], []
+
+    def answer(messages):
+        answers.append([m["id"] for m in messages])
+        return "Start Kraft."
+
+    def offline(text):
         raise deliver.DeliveryError("Telegram unreachable")
-    chat.handle([msg(7, "hi")], source, send_fn=unsendable, answer_fn=lambda m: "Hello.")
-    assert source.acked == [4, 5, 6, 7]
+    assert not chat.handle([msg(7, "flex?")], source, send_fn=offline, answer_fn=answer)
+    assert source.acked == []  # not done until it's sent
+    assert not chat.deliver_outbox(source, offline)
+    # the mailbox hands the message over again: it's not answered a second time
+    assert not chat.handle([msg(7, "flex?")], source, send_fn=offline, answer_fn=answer)
+    assert answers == [[7]]
+    assert chat.deliver_outbox(source, sent.append)
+    assert sent == ["Start Kraft."] and source.acked == [7]
+    assert chat.deliver_outbox(source, sent.append) and sent == ["Start Kraft."]
+
+
+def test_a_lost_acknowledgement_never_means_a_second_answer(monkeypatch):
+    monkeypatch.setattr(chat, "_keep_typing", lambda stop, source: None)
+    answers, sent = [], []
+
+    class Flaky(FakeSource):
+        def done(self, ids):
+            raise chat.ChatError("the mailbox returned HTTP 502")
+    assert chat.handle([msg(8, "hi")], Flaky(), send_fn=sent.append, answer_fn=lambda m: answers.append(m) or "Hi.")
+    source = FakeSource()
+    assert chat.handle([msg(8, "hi"), msg(9, "and?")], source, send_fn=sent.append,
+                       answer_fn=lambda m: answers.append(m) or "And.")
+    assert [[m["id"] for m in a] for a in answers] == [[8], [9]]
+    assert sent == ["Hi.", "And."] and source.acked == [8, 9]
+    assert chat.handle([msg(8, "hi")], source, send_fn=sent.append, answer_fn=lambda m: answers.append(m) or "x")
+    assert source.acked == [8, 9, 8] and len(answers) == 2
 
 
 def test_typing_keeps_the_mailbox_told_the_mac_is_awake(monkeypatch):
@@ -290,7 +323,10 @@ def test_telegram_source_answers_only_dans_chat(tg):
     assert [(m["id"], m["text"], m["reply_to"]) for m in got] == [(10, "who's my flex?", "Booth: Sunday final lineup pass")]
     assert calls[0][1]["timeout"] == 25
     source.done([10])
-    assert source.fetch() == [] and calls[-1][1]["offset"] == 13  # everything up to the sticker is done
+    assert source.fetch() == [] and calls[-1][1]["offset"] == 11  # later updates are fetched again
+    source.done([12])
+    source.done([10])
+    assert json.loads((chat.state_dir() / "telegram_offset.json").read_text()) == {"offset": 13}
     others = json.loads((chat.state_dir() / "telegram_others.json").read_text())
     assert others == [{"id": 7, "name": "Eve", "text": "/start abc"}]
 
@@ -319,6 +355,13 @@ def test_listen_switches_to_the_mailbox_once_the_webhook_is_set(tg, monkeypatch)
     monkeypatch.setattr(chat.requests, "request", lambda *a, **k: mock.Mock(status_code=200, json=lambda: {"messages": []}))
     chat.listen(max_rounds=3)
     assert sources == ["TelegramSource", "MailboxSource"]
+    chats = iter([42, 77, 77])  # `telegram-setup --replace` picks a new chat while Booth listens
+    monkeypatch.setattr(deliver, "telegram_chat_id", lambda: next(chats))
+    polled = []
+    monkeypatch.setattr(chat.requests, "request", lambda *a, **k: polled.append(k["params"]["chat"])
+                        or mock.Mock(status_code=200, json=lambda: {"messages": []}))
+    chat.listen(max_rounds=3)
+    assert polled == ["42", "77", "77"]
 
 
 def test_setup_finds_a_new_chat_through_the_mailbox(tg, monkeypatch, tmp_path):
@@ -359,3 +402,13 @@ def test_run_claude_takes_chat_effort_and_needs_no_tools(monkeypatch):
     assert report.parse_stream(stream, require_tools=False)["structured_output"] == {"reply": "Thanks!"}
     with pytest.raises(report.ReportError, match="without using any of Booth's data tools"):
         report.parse_stream(stream)
+
+
+def test_pictures_and_files_are_described_not_dropped(tg):
+    calls, replies = tg
+    replies["getUpdates"] = lambda params: [
+        {"update_id": 20, "message": {"chat": {"id": 42, "type": "private"}, "photo": [{}], "caption": "my roster"}},
+        {"update_id": 21, "message": {"chat": {"id": 42, "type": "private"}, "document": {}}},
+    ]
+    got = chat.TelegramSource(42).fetch()
+    assert [m["text"] for m in got] == ["[sent a photo with the caption: my roster]", "[sent a file]"]

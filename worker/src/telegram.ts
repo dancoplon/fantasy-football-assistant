@@ -10,10 +10,17 @@ export interface Incoming {
   replyTo: string; // text of the message being replied to, if any
 }
 
-// The parts of a webhook update a chat bot needs: private-chat text messages only.
+// What a chat bot sees of a message it can't read, so it can say so instead of going quiet.
+export function attachmentText(m: any): string {
+  const kind = m.photo ? "a photo" : m.document ? "a file" : m.voice || m.audio ? "a voice message" : m.video ? "a video" : m.sticker ? "a sticker" : "something";
+  return typeof m.caption === "string" && m.caption ? `[sent ${kind} with the caption: ${m.caption}]` : `[sent ${kind}]`;
+}
+
+// The parts of a webhook update a chat bot needs: private-chat messages, with anything that isn't
+// text (a screenshot, a voice note) described, since the bot only reads text.
 export function parseUpdate(update: any): Incoming | null {
   const m = update?.message;
-  if (typeof update?.update_id !== "number" || !m || m.chat?.type !== "private" || typeof m.text !== "string") {
+  if (typeof update?.update_id !== "number" || !m || m.chat?.type !== "private") {
     return null;
   }
   const name = [m.from?.first_name, m.from?.last_name].filter(Boolean).join(" ");
@@ -22,7 +29,7 @@ export function parseUpdate(update: any): Incoming | null {
     updateId: update.update_id,
     chat: String(m.chat.id),
     name,
-    text: m.text,
+    text: typeof m.text === "string" ? m.text : attachmentText(m),
     replyTo: typeof replied?.text === "string" ? replied.text : "",
   };
 }

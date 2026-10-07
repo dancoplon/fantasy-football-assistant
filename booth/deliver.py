@@ -210,12 +210,13 @@ def telegram_setup(replace: bool = False) -> tuple[bool, str]:
         if not any(w in str(exc).lower() for w in ("webhook", "conflict")):  # someone else collects messages
             raise
         updates = []
-        found = _chat_from_reply_service(code)
     for update in updates:
         msg = update.get("message") or {}
         chat = msg.get("chat") or {}
         if chat.get("type") == "private" and code in (msg.get("text") or ""):
             found = chat
+    if not found:
+        found = _chat_from_reply_service(code)  # Booth's listener or mailbox may have collected it first
     if not found:
         return False, (f"Almost done. On the phone with Telegram, open https://t.me/{name}?start={code} and tap "
                        f"Start (if there's no Start button, send the bot this message: {code}). Then run this again.")

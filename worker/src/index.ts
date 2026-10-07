@@ -87,6 +87,12 @@ export class Mailbox extends DurableObject<Env> {
        ON CONFLICT (chat) DO UPDATE SET name = excluded.name, text = excluded.text, at = excluded.at`,
       m.chat, m.name, m.text.slice(0, 200), now.toISOString(),
     );
+    // Every chat's messages are kept (the Mac only collects Dan's), so switching Booth to a new
+    // chat loses nothing. The update id makes a resent update a no-op.
+    const added = this.sql.exec(
+      "INSERT OR IGNORE INTO messages (id, chat, data, at) VALUES (?, ?, ?, ?)",
+      m.updateId, m.chat, JSON.stringify(m), now.toISOString(),
+    ).rowsWritten;
     const dans = this.meta("chat"); // set by the Mac when it checks in
     if (dans && m.chat !== dans) {
       // Not Dan's chat: tell them once, then stay quiet.
@@ -97,11 +103,6 @@ export class Mailbox extends DurableObject<Env> {
       }
       return;
     }
-    // The update id makes a resent update a no-op.
-    const added = this.sql.exec(
-      "INSERT OR IGNORE INTO messages (id, chat, data, at) VALUES (?, ?, ?, ?)",
-      m.updateId, m.chat, JSON.stringify(m), now.toISOString(),
-    ).rowsWritten;
     if (!added || !dans) return;
     const seen = this.meta("mac_seen_at");
     const said = this.meta("asleep_note_at");
@@ -123,7 +124,8 @@ export class Mailbox extends DurableObject<Env> {
 
   async ack(ids: number[]): Promise<void> {
     for (const id of ids) this.sql.exec("UPDATE messages SET done = 1 WHERE id = ?", id);
-    this.sql.exec("DELETE FROM messages WHERE done = 1 AND at < ?", new Date(Date.now() - 30 * 86400_000).toISOString());
+    // Answered messages, and other chats' messages nobody collected, go after a month.
+    this.sql.exec("DELETE FROM messages WHERE at < ?", new Date(Date.now() - 30 * 86400_000).toISOString());
   }
 
   async chats(): Promise<object[]> {
