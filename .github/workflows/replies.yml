@@ -1,0 +1,108 @@
+name: Reply service
+
+# Deploys Booth's reply service (worker/) to Cloudflare and points the Booth bot at it, so Dan's
+# messages to the bot get answers. Needs these repository secrets: CLOUDFLARE_API_TOKEN,
+# CLOUDFLARE_ACCOUNT_ID, TELEGRAM_BOT_TOKEN (Booth's bot) and ANTHROPIC_API_KEY. Until all four are
+# set, it only runs the checks. This repo is public, so nothing here may print a secret.
+on:
+  push:
+    branches: [main]
+    paths: ["worker/**", ".github/workflows/replies.yml"]
+  pull_request:
+    paths: ["worker/**", ".github/workflows/replies.yml"]
+  workflow_dispatch:
+
+concurrency:
+  group: reply-service-${{ github.event_name }}
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+    defaults:
+      run:
+        working-directory: worker
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: worker/package-lock.json
+
+      - name: Install
+        run: npm ci
+
+      - name: Check and test
+        run: npm run check && npm test
+
+      - name: Look for the keys
+        id: keys
+        if: github.event_name != 'pull_request'
+        run: |
+          missing=""
+          for name in CLOUDFLARE_API_TOKEN CLOUDFLARE_ACCOUNT_ID TELEGRAM_BOT_TOKEN ANTHROPIC_API_KEY; do
+            [ -n "${!name}" ] || missing="$missing $name"
+          done
+          if [ -n "$missing" ]; then
+            echo "::notice::Not deploying the reply service yet; these repository secrets are missing:$missing"
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Deploy
+        if: steps.keys.outputs.ready == 'true'
+        run: |
+          npx wrangler deploy
+          # Secrets go in after the deploy, since a worker has to exist before it can hold them.
+          node -e 'const e = process.env; process.stdout.write(JSON.stringify({ANTHROPIC_API_KEY: e.ANTHROPIC_API_KEY, TELEGRAM_BOT_TOKEN: e.TELEGRAM_BOT_TOKEN}))' > "$RUNNER_TEMP/secrets.json"
+          npx wrangler secret bulk "$RUNNER_TEMP/secrets.json"
+          rm -f "$RUNNER_TEMP/secrets.json"
+
+      - name: Point the Booth bot at it
+        if: steps.keys.outputs.ready == 'true'
+        run: |
+          python3 - <<'PY'
+          import hashlib, hmac, json, os, re, sys, urllib.request
+
+          def get(url, headers):
+              with urllib.request.urlopen(urllib.request.Request(url, headers=headers), timeout=30) as resp:
+                  return json.load(resp)
+
+          # The worker's address: its name (wrangler.toml) on the account's workers.dev subdomain.
+          name = re.search(r'^name = "([^"]+)"', open("wrangler.toml").read(), re.M).group(1)
+          account = os.environ["CLOUDFLARE_ACCOUNT_ID"]
+          sub = (get(f"https://api.cloudflare.com/client/v4/accounts/{account}/workers/subdomain",
+                     {"Authorization": f"Bearer {os.environ['CLOUDFLARE_API_TOKEN']}"}).get("result") or {}).get("subdomain")
+          if not sub:
+              print("::error::Couldn't find the workers.dev address. Open Workers & Pages in Cloudflare once to pick a subdomain, then run this again.")
+              sys.exit(1)
+
+          token = os.environ["TELEGRAM_BOT_TOKEN"]
+          secret = hmac.new(token.encode(), b"booth-webhook", hashlib.sha256).hexdigest()
+          def call(method, payload):
+              req = urllib.request.Request(f"https://api.telegram.org/bot{token}/{method}", data=json.dumps(payload).encode(),
+                                           headers={"Content-Type": "application/json"})
+              try:
+                  with urllib.request.urlopen(req, timeout=30) as resp:
+                      return json.load(resp)["result"]
+              except Exception as e:  # never print the URL: it holds the token
+                  print(f"::error::Telegram {method} failed: {type(e).__name__} {getattr(e, 'code', '')}")
+                  sys.exit(1)
+          call("setWebhook", {"url": f"https://{name}.{sub}.workers.dev/telegram", "secret_token": secret,
+                              "allowed_updates": ["message"]})
+          info = call("getWebhookInfo", {})
+          print(f"Telegram now sends Booth's messages to the reply service ({info.get('pending_update_count', 0)} waiting)")
+          if info.get("last_error_message"):
+              print(f"Telegram's last delivery error: {info['last_error_message']}")
+          PY

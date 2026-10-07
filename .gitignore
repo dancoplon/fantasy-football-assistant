@@ -40,3 +40,8 @@ dist/
 .DS_Store
 .idea/
 .vscode/
+
+# --- Reply service (worker/) -------------------------------------------------------
+worker/node_modules/
+worker/.wrangler/
+worker/.dev.vars

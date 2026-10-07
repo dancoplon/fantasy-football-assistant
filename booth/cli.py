@@ -9,6 +9,7 @@
                             (and near each kickoff, check for inactive starters)
   uv run booth send-test    send a short test message (Telegram once set up, else iMessage)
   uv run booth telegram-setup   connect the Booth bot: prints a link to open in Telegram, then run it again
+  uv run booth replies sync|status   Telegram replies: swap news with the reply service now (each run does it too)
   uv run booth manual-status   check the copies of Dan's Yahoo pages used until Yahoo access works
   uv run booth schedule install|uninstall|status|wake|test-send
 """
@@ -156,15 +157,32 @@ def cmd_report(args: argparse.Namespace) -> int:
 
 
 def cmd_run(args: argparse.Namespace) -> int:
+    from booth import replies
+    from booth.deliver import send
     from booth.inactives import run_inactives
-    from booth.jobs import EASTERN, run_due
+    from booth.jobs import EASTERN, LockBusy, run_due
 
-    outcomes = [run_due()]
+    outcomes, reruns = [], []
+    # First what Dan said in Telegram (roster moves, notes), so a report due now includes it.
+    try:
+        pulled, reruns = replies.pull(send_fn=send)
+        outcomes.append(pulled)
+    except LockBusy:
+        outcomes.append("replies: skipped, another run in progress")
+    except Exception as exc:  # the reply service is optional: never stop the reports
+        outcomes.append(f"failed replies: {exc}")
+    outcomes.append(run_due())
     try:
         outcomes.append(run_inactives())
     except Exception as exc:  # never let the inactives check hide the report's outcome
         outcomes.append(f"failed inactives: {exc}")
-    shown = [o for o in outcomes if o != "inactives: nothing due"]
+    try:
+        outcomes += replies.run_reruns(reruns, send_fn=send)
+        outcomes.append(replies.upload())
+    except Exception as exc:
+        outcomes.append(f"failed replies: {exc}")
+    quiet = {"inactives: nothing due", replies.NOT_SET_UP, "replies: nothing new", "replies: up to date"}
+    shown = [o for o in outcomes if o not in quiet]
     # launchd appends this to logs/launchd.out.log, which `booth schedule status` shows.
     print(f"{datetime.now(EASTERN).strftime('%Y-%m-%d %H:%M:%S %Z')}  {'; '.join(shown)}")
     return 1 if any(o.startswith("failed") for o in outcomes) else 0
@@ -206,6 +224,33 @@ def cmd_telegram_setup(args: argparse.Namespace) -> int:
         return 1
     print(text)
     return 0 if connected else 2
+
+
+def cmd_replies(args: argparse.Namespace) -> int:
+    from booth import replies
+    from booth.deliver import send
+    from booth.jobs import LockBusy
+
+    if args.action == "status":
+        url = replies.service_url()
+        if not url:
+            print("The reply service isn't set up: the Booth bot has no webhook yet (the GitHub deploy sets it).")
+            return 1
+        st = replies._load_state()
+        print(f"Reply service: {url}")
+        print(f"Last upload: {st.get('uploaded_at', 'never')}")
+        print(f"Notes from chat: {len(replies.dan_notes())}")
+        return 0
+    try:
+        for outcome in replies.sync(send_fn=send):
+            print(outcome)
+    except LockBusy:
+        print("error: a scheduled Booth run is in progress; try again in a few minutes.", file=sys.stderr)
+        return 1
+    except replies.RepliesError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    return 0
 
 
 def cmd_schedule(args: argparse.Namespace) -> int:
@@ -251,6 +296,9 @@ def main(argv: list[str] | None = None) -> int:
     p_tg.set_defaults(func=cmd_telegram_setup)
     sub.add_parser("manual-status", help="check the roster/players/matchup copies used until Yahoo works").set_defaults(
         func=cmd_manual_status)
+    p_rep2 = sub.add_parser("replies", help="Telegram replies: sync with the reply service now, or show its status")
+    p_rep2.add_argument("action", choices=["sync", "status"])
+    p_rep2.set_defaults(func=cmd_replies)
     p_sch = sub.add_parser("schedule", help="manage the launchd job (macOS)")
     p_sch.add_argument("action", choices=["install", "uninstall", "status", "wake", "test-send"])
     p_sch.add_argument("--via", choices=["telegram", "imessage"], help="test-send: test this channel")

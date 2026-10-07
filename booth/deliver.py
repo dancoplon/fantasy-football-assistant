@@ -204,7 +204,14 @@ def telegram_setup(replace: bool = False) -> tuple[bool, str]:
                       "run `uv run booth telegram-setup --replace`.")
     code = _setup_code()
     found = None
-    for update in _telegram("getUpdates", allowed_updates=["message"]):
+    try:
+        updates = _telegram("getUpdates", allowed_updates=["message"])
+    except DeliveryError as exc:
+        if "webhook" not in str(exc).lower():
+            raise
+        updates = []
+        found = _chat_from_reply_service(code)
+    for update in updates:
         msg = update.get("message") or {}
         chat = msg.get("chat") or {}
         if chat.get("type") == "private" and code in (msg.get("text") or ""):
@@ -214,10 +221,31 @@ def telegram_setup(replace: bool = False) -> tuple[bool, str]:
                        f"Start (if there's no Start button, send the bot this message: {code}). Then run this again.")
     _write_json(_telegram_file(), {"chat_id": found["id"], "bot": name})
     (state_dir() / "telegram_setup.json").unlink(missing_ok=True)
+    try:  # let the reply service answer the new chat right away
+        from booth import replies
+
+        replies.upload(force=True)
+    except Exception:  # noqa: BLE001 - the next scheduled run uploads anyway
+        pass
     _telegram("sendMessage", chat_id=found["id"], text="Booth is connected. Your reports will arrive here from now on.")
     handle = f"(@{found['username']})" if found.get("username") else ""
     who = " ".join(x for x in (found.get("first_name"), handle) if x) or "your Telegram account"
     return True, f"Connected @{name} to {who}. Sent a hello there."
+
+
+def _chat_from_reply_service(code: str) -> dict | None:
+    """With the reply service set up, Telegram sends messages there instead of holding them
+    for getUpdates, so look for the code among the chats the service has heard from."""
+    from booth import replies
+
+    try:
+        seen = replies.chats()
+    except replies.RepliesError as exc:
+        raise DeliveryError(f"Telegram sends this bot's messages to the reply service, and {exc}.") from None
+    for c in seen:
+        if code in str(c.get("text") or "") and str(c.get("id", "")).lstrip("-").isdigit():
+            return {"id": int(c["id"]), "first_name": c.get("name") or ""}
+    return None
 
 
 def notify(text: str) -> None:

@@ -1,0 +1,23 @@
+name = "booth-replies"
+main = "src/index.ts"
+compatibility_date = "2025-09-01"
+compatibility_flags = ["nodejs_compat"]
+workers_dev = true
+
+[[durable_objects.bindings]]
+name = "BOOTH"
+class_name = "Booth"
+
+# SQLite-backed Durable Objects are on the Workers free plan.
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["Booth"]
+
+[vars]
+MODEL = "claude-opus-5-5"
+EFFORT = "medium"
+# Chat replies stop for the rest of the month once Booth's estimate of its API spend reaches this.
+MONTHLY_CAP_USD = "20"
+
+[observability]
+enabled = true
