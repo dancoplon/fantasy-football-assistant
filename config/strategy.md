@@ -12,7 +12,8 @@ Loaded on every run alongside `league.json`. Dan edits this file in plain Englis
 - Before any drop, check whether an injured player can move to IR instead (IR slots: 3). Which statuses qualify (IR, Out, NA) depends on the league's IR setting, so confirm in Yahoo. Players can't be added straight to IR in this league.
 
 ## Waivers and FAAB
-- Budget: $100 for the rest of the season (unspent as of Oct 5).
+- Budget: $100 at the start of the season. What's left is in Dan's roster copy (faab_remaining) or Yahoo.
+- Price bids from this league's own market (faab_market in get_league_context), not generic FAAB charts. Losing a player Dan needs costs more than overpaying by a few dollars.
 - Default aggressiveness: moderate. Bid big only for a likely weekly starter for the rest of 2026; keep at least ~$30 in reserve for injuries before the playoffs (Weeks 15-17).
 - Streaming: stream QB only when needed (bye weeks, injury). K and DEF: stream by matchup when the rostered one has a bad matchup or a bye.
 

@@ -10,6 +10,7 @@ def _no_local_league_data(monkeypatch, tmp_path_factory):
     monkeypatch.setattr(manual, "MANUAL_ROSTER_LOCAL", empty / "manual_roster.local.json")
     monkeypatch.setattr(manual, "MANUAL_FREE_AGENTS", empty / "manual_free_agents.json")
     monkeypatch.setattr(manual, "MANUAL_MATCHUP", empty / "manual_matchup.json")
+    monkeypatch.setattr(manual, "FAAB_MARKET", empty / "faab_market.json")
 
 
 @pytest.fixture(autouse=True)

@@ -60,6 +60,7 @@ Booth works from copies of Dan's Yahoo pages. He sends screenshots (or saved PDF
 | `config/manual_roster.local.json` | his team page (optional `slot`: where he has each player, `BN` = bench) | instead of the seeded `config/manual_roster.json`; flagged as possibly stale after 7 days |
 | `config/manual_free_agents.json` | the available-players page | for 7 days after `as_of` |
 | `config/manual_matchup.json` | his matchup page | only for its `week`, and not after 8 days |
+| `config/faab_market.json` | his league home page: each team's waiver budget (standings) and winning bids (recent transactions) | always, as a running log of what this league pays; Tuesday bids are priced from it. Budgets are flagged after 8 days. Add each week's winning bids and keep the old ones: it stays useful after Yahoo works, since Yahoo only lists recent moves |
 
 After writing any of them, run `uv run booth manual-status`: it lists what each file holds, how old it is, whether Booth will use it, and any problems (exit code 1 if there are problems).
 
@@ -72,7 +73,7 @@ The same MCP server also exposes free public data, none of which needs Yahoo:
 - `get_injury_report`: the NFL's official Wed-Fri injury report (nflverse)
 - `get_trending_players`: most-added/dropped players across Sleeper leagues
 - `get_game_weather`: kickoff-window forecast with wind/rain/snow/cold flags (Open-Meteo)
-- `get_league_context`: `config/league.json` (league rules) and `config/strategy.md` (strategy, in plain English)
+- `get_league_context`: `config/league.json` (league rules), `config/strategy.md` (strategy, in plain English), and a summary of `config/faab_market.json` (what this league pays on waivers)
 
 Downloads are cached in `state/cache/`; if a source is down, the last good copy is used. `uv run booth data-check` pulls each source once and prints a summary.
 
