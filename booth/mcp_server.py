@@ -1,4 +1,4 @@
-"""Booth's MCP server: six read-only Yahoo tools for one league, plus external data tools.
+"""Booth's MCP server: read-only Yahoo tools for one league, plus external data tools.
 
 Run with `uv run booth-mcp` (stdio). Claude Code picks it up from .mcp.json.
 """
@@ -44,14 +44,19 @@ def get_league_settings() -> dict:
         return _error(exc)
 
 
-def _add_teams_and_byes(players) -> None:
+def _bye_table() -> dict[str, int]:
+    try:
+        return nflverse.bye_weeks(nflverse.games())
+    except DataSourceError:
+        return {}
+
+
+def _add_teams_and_byes(players, byes: dict[str, int] | None = None) -> None:
     """Give Yahoo players nflverse team codes (nfl_team) and bye weeks, like Dan's manual copies."""
     if not isinstance(players, list):
         return
-    try:
-        byes = nflverse.bye_weeks(nflverse.games())
-    except DataSourceError:
-        byes = {}
+    if byes is None:
+        byes = _bye_table()
     for p in players:
         if not isinstance(p, dict) or "editorial_team_abbr" not in p:
             continue
@@ -134,6 +139,24 @@ def get_transactions(types: str = "add,drop,trade", count: int = 25) -> list[dic
         return client().transactions(types, count)
     except (ConfigError, AuthError, YahooAccessError) as exc:
         return _error(exc)
+
+
+@mcp.tool(annotations=READ_ONLY)
+def get_team_rosters(team: str | None = None) -> list[dict] | dict:
+    """Other teams' rosters, for trade ideas and scouting: every team in the league, or one team.
+
+    team: part of a team name (e.g. "House Bluth") or a team_key; omit for all 12 teams.
+    Each team has team_name, is_me, faab_remaining, and players with slot, eligible positions,
+    injury status, nfl_team and bye_week.
+    """
+    try:
+        teams = client().team_rosters(team)
+    except (ConfigError, AuthError, YahooAccessError) as exc:
+        return _error(exc)
+    byes = _bye_table()
+    for t in teams:
+        _add_teams_and_byes(t.get("players"), byes)
+    return teams
 
 
 @mcp.tool(annotations=READ_ONLY)

@@ -153,7 +153,7 @@ def test_other_tools_return_error_not_crash(monkeypatch):
 def test_server_lists_read_only_tools():
     tools = asyncio.run(mcp_server.mcp.list_tools())
     assert {t.name for t in tools} == {"get_league_settings", "get_my_roster", "get_free_agents",
-                                       "get_matchup", "get_transactions", "get_standings",
+                                       "get_matchup", "get_team_rosters", "get_transactions", "get_standings",
                                        "get_league_context", "get_schedule", "get_player_usage",
                                        "get_injury_report", "get_trending_players", "get_game_weather"}
     assert all(t.annotations.read_only_hint for t in tools)
@@ -519,3 +519,38 @@ def test_roster_tool_without_schedule_still_returns(monkeypatch):
     monkeypatch.setattr(nflverse, "games", down)
     p = mcp_server.get_my_roster()["players"][0]
     assert p["nfl_team"] == "BUF" and "bye_week" not in p
+
+
+def test_team_rosters_all_and_by_name(client):
+    client.league.teams.return_value = {
+        ME: {"name": "Mayor of Titty City", "faab_balance": "95"},
+        OPP: {"name": "MC⚡️DC", "faab_balance": "91"},
+    }
+    team = mock.Mock()
+    team.roster.return_value = [{"name": "Some Back", "selected_position": "RB"}]
+    client.league.to_team.return_value = team
+    client.league.standings.return_value = [{"team_key": OPP, "rank": "3",
+                                             "outcome_totals": {"wins": "3", "losses": 1, "ties": 0}}]
+    every = client.team_rosters()
+    assert every[1]["rank"] == "3" and every[1]["record"] == "3-1" and "record" not in every[0]
+    assert [t["team_name"] for t in every] == ["Mayor of Titty City", "MC⚡️DC"]
+    assert [t["is_me"] for t in every] == [True, False]
+    assert every[1]["faab_remaining"] == 91 and every[1]["players"][0]["slot"] == "RB"
+    one = client.team_rosters("mc dc")
+    assert [t["team_key"] for t in one] == [OPP]
+    with pytest.raises(YahooAccessError, match="No team matches"):
+        client.team_rosters("Nobody")
+
+
+def test_team_rosters_tool_adds_byes(monkeypatch):
+    from booth.data import nflverse
+    fake = mock.Mock()
+    fake.team_rosters.return_value = [{"team_name": "A", "players": [{"name": "X", "editorial_team_abbr": "Cin"}]},
+                                      {"team_name": "B", "players": [{"name": "Y", "editorial_team_abbr": "Mia"}]}]
+    monkeypatch.setattr(mcp_server, "client", lambda: fake)
+    calls = []
+    monkeypatch.setattr(nflverse, "games", lambda: calls.append(1) or [{"week": "5", "home_team": "CIN", "away_team": "BUF"},
+                                                                       {"week": "6", "home_team": "MIA", "away_team": "BUF"}])
+    out = mcp_server.get_team_rosters()
+    assert out[0]["players"][0]["bye_week"] == 6 and out[1]["players"][0]["bye_week"] == 5
+    assert len(calls) == 1
